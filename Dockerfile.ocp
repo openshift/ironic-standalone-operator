@@ -4,6 +4,6 @@ COPY . .
 RUN CGO_ENABLED=0 GO111MODULE=on go build -a -o manager cmd/main.go
 
 FROM registry.ci.openshift.org/ocp/4.21:base-rhel9
-COPY --from=builder /go/src/github.com/metal3-io/ironic-standalone-operator/bin/manager /
+COPY --from=builder /go/src/github.com/metal3-io/ironic-standalone-operator/manager /
 
 ENTRYPOINT ["/manager"]
