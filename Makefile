@@ -244,11 +244,11 @@ $(KUSTOMIZE): $(LOCALBIN)
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary. If wrong version is installed, it will be overwritten.
 $(CONTROLLER_GEN): $(LOCALBIN)
 	test -s $(LOCALBIN)/controller-gen && $(LOCALBIN)/controller-gen --version | grep -q $(CONTROLLER_TOOLS_VERSION) || \
-	GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION)
+	cd hack/tools && go build -o ../../bin/controller-gen sigs.k8s.io/controller-tools/cmd/controller-gen
 
 $(GOLANGCI_LINT): $(LOCALBIN) ## Download golangci-lint locally if necessary. If wrong version is installed, it will be overwritten.
 	test -s $(GOLANGCI_LINT) && $(GOLANGCI_LINT) --version | grep -q $(GOLANGCI_LINT_VERSION)  || \
-	GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	cd hack/tools && go build -o ../../bin/golangci-lint github.com/golangci/golangci-lint/cmd/golangci-lint
 
 .PHONY: lint
 lint: $(GOLANGCI_LINT)
