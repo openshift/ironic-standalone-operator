@@ -20,6 +20,7 @@ const (
 	ironicPortName    = "ironic-api"
 	imagesPortName    = "image-svc"
 	imagesTLSPortName = "image-svc-tls"
+	metricsPortName   = "metrics"
 
 	ironicUser      int64 = 997
 	ironicGroup     int64 = 994
@@ -29,6 +30,8 @@ const (
 	authDir   = "/auth"
 	certsDir  = "/certs"
 	sharedDir = "/shared"
+
+	metricsPort = 9608
 
 	knownExistingPath = "/images/ironic-python-agent.kernel"
 )
@@ -173,7 +176,36 @@ func databaseClientEnvVars(db *metal3api.Database) []corev1.EnvVar {
 	return envVars
 }
 
-func buildIronicEnvVars(resources Resources) []corev1.EnvVar {
+func buildTrustedCAEnvVars(cctx ControllerContext, configMap *corev1.ConfigMap) []corev1.EnvVar {
+	if configMap == nil || len(configMap.Data) == 0 {
+		return nil
+	}
+
+	// Select the first key from the ConfigMap and collect ignored keys
+	var firstKey string
+	first := true
+	for key := range configMap.Data {
+		if first {
+			firstKey = key
+			first = false
+		} else {
+			cctx.Logger.Info("ignoring duplicate key in Trusted CA ConfigMap",
+				"key", key, "configmap", fmt.Sprintf("%s/%s", configMap.Namespace, configMap.Name))
+		}
+	}
+
+	// Build the path to the CA bundle file
+	caPath := fmt.Sprintf("%s/ca/trusted/%s", certsDir, firstKey)
+
+	return []corev1.EnvVar{
+		{
+			Name:  "WEBSERVER_CACERT_FILE",
+			Value: caPath,
+		},
+	}
+}
+
+func buildIronicEnvVars(cctx ControllerContext, resources Resources) []corev1.EnvVar {
 	result := buildCommonEnvVars(resources.Ironic)
 	result = append(result, []corev1.EnvVar{
 		{
@@ -235,11 +267,31 @@ func buildIronicEnvVars(resources Resources) []corev1.EnvVar {
 		)
 	}
 
+	if resources.TrustedCAConfigMap != nil {
+		result = append(result, buildTrustedCAEnvVars(cctx, resources.TrustedCAConfigMap)...)
+	}
+
 	if resources.Ironic.Spec.ExtraConfig != nil {
 		result = append(result, buildExtraConfigVars(resources.Ironic)...)
 	}
 
 	result = appendStringEnv(result, "IRONIC_EXTERNAL_IP", resources.Ironic.Spec.Networking.ExternalIP)
+
+	// Add sensor data environment variables when PrometheusExporter is enabled
+	if resources.Ironic.Spec.PrometheusExporter != nil && resources.Ironic.Spec.PrometheusExporter.Enabled {
+		result = append(result, corev1.EnvVar{
+			Name:  "SEND_SENSOR_DATA",
+			Value: "true",
+		})
+		sensorInterval := resources.Ironic.Spec.PrometheusExporter.SensorCollectionInterval
+		if sensorInterval == 0 {
+			sensorInterval = 60 // default
+		}
+		result = append(result, corev1.EnvVar{
+			Name:  "OS_SENSOR_DATA__INTERVAL",
+			Value: strconv.Itoa(sensorInterval),
+		})
+	}
 
 	return result
 }
@@ -378,6 +430,29 @@ func buildIronicVolumesAndMounts(resources Resources) (volumes []corev1.Volume, 
 			corev1.VolumeMount{
 				Name:      "cert-bmc",
 				MountPath: certsDir + "/ca/bmc",
+				ReadOnly:  true,
+			},
+		)
+	}
+
+	if resources.TrustedCAConfigMap != nil {
+		volumes = append(volumes,
+			corev1.Volume{
+				Name: "trusted-ca",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: resources.TrustedCAConfigMap.Name,
+						},
+						DefaultMode: ptr.To(corev1.ConfigMapVolumeSourceDefaultMode),
+					},
+				},
+			},
+		)
+		mounts = append(mounts,
+			corev1.VolumeMount{
+				Name:      "trusted-ca",
+				MountPath: certsDir + "/ca/trusted",
 				ReadOnly:  true,
 			},
 		)
@@ -549,6 +624,40 @@ func newKeepalivedContainer(versionInfo VersionInfo, ironic *metal3api.Ironic) c
 	}
 }
 
+func newPrometheusExporterContainer(versionInfo VersionInfo, ironic *metal3api.Ironic, volumeMount corev1.VolumeMount) corev1.Container {
+	port := int32(metricsPort)
+	if ironic.Spec.Networking.PrometheusExporterPort != 0 {
+		port = ironic.Spec.Networking.PrometheusExporterPort
+	}
+
+	return corev1.Container{
+		Name:    "ironic-prometheus-exporter",
+		Image:   versionInfo.IronicImage,
+		Command: []string{"/bin/runironic-exporter"},
+		Env: []corev1.EnvVar{
+			{
+				Name:  "FLASK_RUN_PORT",
+				Value: strconv.Itoa(int(port)),
+			},
+		},
+		Ports: []corev1.ContainerPort{
+			{
+				Name:          metricsPortName,
+				Protocol:      corev1.ProtocolTCP,
+				ContainerPort: port,
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{volumeMount},
+		SecurityContext: &corev1.SecurityContext{
+			RunAsUser:  ptr.To(ironicUser),
+			RunAsGroup: ptr.To(ironicGroup),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+		},
+	}
+}
+
 func newIronicPodTemplate(cctx ControllerContext, resources Resources) (corev1.PodTemplateSpec, error) {
 	if len(resources.APISecret.Data[htpasswdKey]) == 0 {
 		return corev1.PodTemplateSpec{}, errors.New("no htpasswd in the API secret")
@@ -591,7 +700,7 @@ func newIronicPodTemplate(cctx ControllerContext, resources Resources) (corev1.P
 			Name:         "ironic",
 			Image:        cctx.VersionInfo.IronicImage,
 			Command:      []string{"/bin/runironic"},
-			Env:          buildIronicEnvVars(resources),
+			Env:          buildIronicEnvVars(cctx, resources),
 			VolumeMounts: mounts,
 			SecurityContext: &corev1.SecurityContext{
 				RunAsUser:  ptr.To(ironicUser),
@@ -645,6 +754,10 @@ func newIronicPodTemplate(cctx ControllerContext, resources Resources) (corev1.P
 
 	if resources.Ironic.Spec.Networking.IPAddressManager == metal3api.IPAddressManagerKeepalived {
 		containers = append(containers, newKeepalivedContainer(cctx.VersionInfo, resources.Ironic))
+	}
+
+	if resources.Ironic.Spec.PrometheusExporter != nil && resources.Ironic.Spec.PrometheusExporter.Enabled {
+		containers = append(containers, newPrometheusExporterContainer(cctx.VersionInfo, resources.Ironic, sharedVolumeMount))
 	}
 
 	// Make sure the pod is restarted when secrets change.
