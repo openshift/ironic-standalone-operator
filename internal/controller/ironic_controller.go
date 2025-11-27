@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"slices"
 
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -57,7 +58,9 @@ type IronicReconciler struct {
 //+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 //+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;delete
+//+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;delete
+//+kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -169,11 +172,20 @@ func (r *IronicReconciler) handleIronic(cctx ironic.ControllerContext, ironicCon
 		}
 	}
 
+	var trustedCAConfigMap *corev1.ConfigMap
+	if trustedCAConfigMapName := ironicConf.Spec.TLS.TrustedCAName; trustedCAConfigMapName != "" {
+		trustedCAConfigMap, requeue, err = r.getConfigMap(cctx, ironicConf, trustedCAConfigMapName)
+		if requeue || err != nil {
+			return
+		}
+	}
+
 	resources := ironic.Resources{
-		Ironic:      ironicConf,
-		APISecret:   apiSecret,
-		TLSSecret:   tlsSecret,
-		BMCCASecret: bmcSecret,
+		Ironic:             ironicConf,
+		APISecret:          apiSecret,
+		TLSSecret:          tlsSecret,
+		BMCCASecret:        bmcSecret,
+		TrustedCAConfigMap: trustedCAConfigMap,
 	}
 
 	status, err := ironic.EnsureIronic(cctx, resources)
@@ -222,6 +234,28 @@ func (r *IronicReconciler) getAndUpdateSecret(cctx ironic.ControllerContext, iro
 	}
 
 	return secret, false, nil
+}
+
+// Get a user-provided configmap.
+// Only returns a valid pointer if requeue is false and err is nil.
+func (r *IronicReconciler) getConfigMap(cctx ironic.ControllerContext, ironicConf *metal3api.Ironic, configMapName string) (configMap *corev1.ConfigMap, requeue bool, err error) {
+	namespacedName := types.NamespacedName{
+		Namespace: ironicConf.Namespace,
+		Name:      configMapName,
+	}
+	configMap = &corev1.ConfigMap{}
+	err = cctx.Client.Get(cctx.Context, namespacedName, configMap)
+	if err != nil {
+		// NotFound requires a user's intervention, so reporting it in the conditions.
+		// Everything else is reported up for a retry.
+		if k8serrors.IsNotFound(err) {
+			message := fmt.Sprintf("configmap %s/%s not found", ironicConf.Namespace, configMapName)
+			_ = r.setNotReady(cctx, ironicConf, metal3api.IronicReasonFailed, message)
+		}
+		return nil, true, fmt.Errorf("cannot load configmap %s/%s: %w", ironicConf.Namespace, configMapName, err)
+	}
+
+	return configMap, false, nil
 }
 
 func (r *IronicReconciler) ensureAPISecret(cctx ironic.ControllerContext, ironicConf *metal3api.Ironic) (apiSecret *corev1.Secret, requeue bool, err error) {
@@ -278,12 +312,24 @@ func (r *IronicReconciler) cleanUp(cctx ironic.ControllerContext, ironicConf *me
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *IronicReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&metal3api.Ironic{}).
 		Owns(&corev1.Secret{}, builder.MatchEveryOwner).
 		Owns(&corev1.Service{}).
 		Owns(&appsv1.DaemonSet{}).
 		Owns(&appsv1.Deployment{}).
-		Owns(&batchv1.Job{}).
-		Complete(r)
+		Owns(&batchv1.Job{})
+
+	hasServiceMonitor, err := clusterHasCRD(mgr, &monitoringv1.ServiceMonitor{})
+	if err != nil {
+		return err
+	}
+
+	if hasServiceMonitor {
+		builder = builder.Owns(&monitoringv1.ServiceMonitor{})
+	} else {
+		r.Log.Info("WARNING: ServiceMonitor resources are not available and will not be reconciled")
+	}
+
+	return builder.Complete(r)
 }

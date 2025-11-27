@@ -163,6 +163,15 @@ EXPERIMENTAL: requires feature gate Overrides.<br/>
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b><a href="#ironicspecprometheusexporter">prometheusExporter</a></b></td>
+        <td>object</td>
+        <td>
+          PrometheusExporter configures sensor data collection and Prometheus metrics export.
+When enabled, this configures Ironic to collect sensor data and deploys the
+ironic-prometheus-exporter container.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b><a href="#ironicspectls">tls</a></b></td>
         <td>object</td>
         <td>
@@ -521,6 +530,18 @@ Only set if no other options can be used.<br/>
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b>prometheusExporterPort</b></td>
+        <td>integer</td>
+        <td>
+          PrometheusExporterPort is the port used for the Ironic Prometheus Exporter metrics endpoint.
+Only used when spec.prometheusExporter.enabled is true.<br/>
+          <br/>
+            <i>Format</i>: int32<br/>
+            <i>Default</i>: 9608<br/>
+            <i>Minimum</i>: 1<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b>rpcPort</b></td>
         <td>integer</td>
         <td>
@@ -737,8 +758,8 @@ Cannot be updated.<br/>
         <td>[]object</td>
         <td>
           List of sources to populate environment variables in the container.
-The keys defined within a source must be a C_IDENTIFIER. All invalid keys
-will be reported as an event when the container is starting. When a key exists in multiple
+The keys defined within a source may consist of any printable ASCII characters except '='.
+When a key exists in multiple
 sources, the value associated with the last source will take precedence.
 Values defined by an Env with a duplicate key will take precedence.
 Cannot be updated.<br/>
@@ -827,10 +848,10 @@ More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-co
         <td>string</td>
         <td>
           RestartPolicy defines the restart behavior of individual containers in a pod.
-This field may only be set for init containers, and the only allowed value is "Always".
-For non-init containers or when this field is not specified,
+This overrides the pod-level restart policy. When this field is not specified,
 the restart behavior is defined by the Pod's restart policy and the container type.
-Setting the RestartPolicy as "Always" for the init container will have the following effect:
+Additionally, setting the RestartPolicy as "Always" for the init container will
+have the following effect:
 this init container will be continually restarted on
 exit until all regular containers have terminated. Once all regular
 containers have completed, all init containers with restartPolicy "Always"
@@ -841,6 +862,23 @@ for the container to complete before proceeding to the next init
 container. Instead, the next init container starts immediately after this
 init container is started, or after any startupProbe has successfully
 completed.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#ironicspecoverridescontainersindexrestartpolicyrulesindex">restartPolicyRules</a></b></td>
+        <td>[]object</td>
+        <td>
+          Represents a list of rules to be checked to determine if the
+container should be restarted on exit. The rules are evaluated in
+order. Once a rule matches a container exit condition, the remaining
+rules are ignored. If no rule matches the container exit condition,
+the Container-level restart policy determines the whether the container
+is restarted or not. Constraints on the rules:
+- At most 20 rules are allowed.
+- Rules can have the same action.
+- Identical rules are not forbidden in validations.
+When rules are specified, container MUST set RestartPolicy explicitly
+even it if matches the Pod's RestartPolicy.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -970,7 +1008,8 @@ EnvVar represents an environment variable present in a Container.
         <td><b>name</b></td>
         <td>string</td>
         <td>
-          Name of the environment variable. Must be a C_IDENTIFIER.<br/>
+          Name of the environment variable.
+May consist of any printable ASCII characters except '='.<br/>
         </td>
         <td>true</td>
       </tr><tr>
@@ -1028,6 +1067,14 @@ Source for the environment variable's value. Cannot be used if value is not empt
         <td>
           Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
 spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#ironicspecoverridescontainersindexenvindexvaluefromfilekeyref">fileKeyRef</a></b></td>
+        <td>object</td>
+        <td>
+          FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -1125,6 +1172,66 @@ spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podI
         <td>string</td>
         <td>
           Version of the schema the FieldPath is written in terms of, defaults to "v1".<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Ironic.spec.overrides.containers[index].env[index].valueFrom.fileKeyRef
+<sup><sup>[↩ Parent](#ironicspecoverridescontainersindexenvindexvaluefrom)</sup></sup>
+
+
+
+FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>key</b></td>
+        <td>string</td>
+        <td>
+          The key within the env file. An invalid key will prevent the pod from starting.
+The keys defined within a source may consist of any printable ASCII characters except '='.
+During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>path</b></td>
+        <td>string</td>
+        <td>
+          The path within the volume from which to select the file.
+Must be relative and may not contain the '..' path or start with '..'.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>volumeName</b></td>
+        <td>string</td>
+        <td>
+          The name of the volume mount containing the env file.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>optional</b></td>
+        <td>boolean</td>
+        <td>
+          Specify whether the file or its key must be defined. If the file or key
+does not exist, then the env var is not published.
+If optional is set to true and the specified key does not exist,
+the environment variable will not be set in the Pod's containers.
+
+If optional is set to false and the specified key does not exist,
+an error will be returned during Pod creation.<br/>
+          <br/>
+            <i>Default</i>: false<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -1247,7 +1354,8 @@ EnvFromSource represents the source of a set of ConfigMaps or Secrets
         <td><b>prefix</b></td>
         <td>string</td>
         <td>
-          Optional text to prepend to the name of each environment variable. Must be a C_IDENTIFIER.<br/>
+          Optional text to prepend to the name of each environment variable.
+May consist of any printable ASCII characters except '='.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -2664,7 +2772,7 @@ More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-co
           Claims lists the names of resources, defined in spec.resourceClaims,
 that are used by this container.
 
-This is an alpha field and requires enabling the
+This field depends on the
 DynamicResourceAllocation feature gate.
 
 This field is immutable. It can only be set for containers.<br/>
@@ -2724,6 +2832,82 @@ inside a container.<br/>
           Request is the name chosen for a request in the referenced claim.
 If empty, everything from the claim is made available, otherwise
 only the result of this request.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Ironic.spec.overrides.containers[index].restartPolicyRules[index]
+<sup><sup>[↩ Parent](#ironicspecoverridescontainersindex)</sup></sup>
+
+
+
+ContainerRestartRule describes how a container exit is handled.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>action</b></td>
+        <td>string</td>
+        <td>
+          Specifies the action taken on a container exit if the requirements
+are satisfied. The only possible value is "Restart" to restart the
+container.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b><a href="#ironicspecoverridescontainersindexrestartpolicyrulesindexexitcodes">exitCodes</a></b></td>
+        <td>object</td>
+        <td>
+          Represents the exit codes to check on container exits.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Ironic.spec.overrides.containers[index].restartPolicyRules[index].exitCodes
+<sup><sup>[↩ Parent](#ironicspecoverridescontainersindexrestartpolicyrulesindex)</sup></sup>
+
+
+
+Represents the exit codes to check on container exits.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>operator</b></td>
+        <td>string</td>
+        <td>
+          Represents the relationship between the container exit code(s) and the
+specified values. Possible values are:
+- In: the requirement is satisfied if the container exit code is in the
+  set of specified values.
+- NotIn: the requirement is satisfied if the container exit code is
+  not in the set of specified values.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>values</b></td>
+        <td>[]integer</td>
+        <td>
+          Specifies the set of values to check for container exit codes.
+At most 255 elements are allowed.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -3637,8 +3821,8 @@ Cannot be updated.<br/>
         <td>[]object</td>
         <td>
           List of sources to populate environment variables in the container.
-The keys defined within a source must be a C_IDENTIFIER. All invalid keys
-will be reported as an event when the container is starting. When a key exists in multiple
+The keys defined within a source may consist of any printable ASCII characters except '='.
+When a key exists in multiple
 sources, the value associated with the last source will take precedence.
 Values defined by an Env with a duplicate key will take precedence.
 Cannot be updated.<br/>
@@ -3727,10 +3911,10 @@ More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-co
         <td>string</td>
         <td>
           RestartPolicy defines the restart behavior of individual containers in a pod.
-This field may only be set for init containers, and the only allowed value is "Always".
-For non-init containers or when this field is not specified,
+This overrides the pod-level restart policy. When this field is not specified,
 the restart behavior is defined by the Pod's restart policy and the container type.
-Setting the RestartPolicy as "Always" for the init container will have the following effect:
+Additionally, setting the RestartPolicy as "Always" for the init container will
+have the following effect:
 this init container will be continually restarted on
 exit until all regular containers have terminated. Once all regular
 containers have completed, all init containers with restartPolicy "Always"
@@ -3741,6 +3925,23 @@ for the container to complete before proceeding to the next init
 container. Instead, the next init container starts immediately after this
 init container is started, or after any startupProbe has successfully
 completed.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#ironicspecoverridesinitcontainersindexrestartpolicyrulesindex">restartPolicyRules</a></b></td>
+        <td>[]object</td>
+        <td>
+          Represents a list of rules to be checked to determine if the
+container should be restarted on exit. The rules are evaluated in
+order. Once a rule matches a container exit condition, the remaining
+rules are ignored. If no rule matches the container exit condition,
+the Container-level restart policy determines the whether the container
+is restarted or not. Constraints on the rules:
+- At most 20 rules are allowed.
+- Rules can have the same action.
+- Identical rules are not forbidden in validations.
+When rules are specified, container MUST set RestartPolicy explicitly
+even it if matches the Pod's RestartPolicy.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -3870,7 +4071,8 @@ EnvVar represents an environment variable present in a Container.
         <td><b>name</b></td>
         <td>string</td>
         <td>
-          Name of the environment variable. Must be a C_IDENTIFIER.<br/>
+          Name of the environment variable.
+May consist of any printable ASCII characters except '='.<br/>
         </td>
         <td>true</td>
       </tr><tr>
@@ -3928,6 +4130,14 @@ Source for the environment variable's value. Cannot be used if value is not empt
         <td>
           Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
 spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#ironicspecoverridesinitcontainersindexenvindexvaluefromfilekeyref">fileKeyRef</a></b></td>
+        <td>object</td>
+        <td>
+          FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -4025,6 +4235,66 @@ spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podI
         <td>string</td>
         <td>
           Version of the schema the FieldPath is written in terms of, defaults to "v1".<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Ironic.spec.overrides.initContainers[index].env[index].valueFrom.fileKeyRef
+<sup><sup>[↩ Parent](#ironicspecoverridesinitcontainersindexenvindexvaluefrom)</sup></sup>
+
+
+
+FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>key</b></td>
+        <td>string</td>
+        <td>
+          The key within the env file. An invalid key will prevent the pod from starting.
+The keys defined within a source may consist of any printable ASCII characters except '='.
+During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>path</b></td>
+        <td>string</td>
+        <td>
+          The path within the volume from which to select the file.
+Must be relative and may not contain the '..' path or start with '..'.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>volumeName</b></td>
+        <td>string</td>
+        <td>
+          The name of the volume mount containing the env file.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>optional</b></td>
+        <td>boolean</td>
+        <td>
+          Specify whether the file or its key must be defined. If the file or key
+does not exist, then the env var is not published.
+If optional is set to true and the specified key does not exist,
+the environment variable will not be set in the Pod's containers.
+
+If optional is set to false and the specified key does not exist,
+an error will be returned during Pod creation.<br/>
+          <br/>
+            <i>Default</i>: false<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -4147,7 +4417,8 @@ EnvFromSource represents the source of a set of ConfigMaps or Secrets
         <td><b>prefix</b></td>
         <td>string</td>
         <td>
-          Optional text to prepend to the name of each environment variable. Must be a C_IDENTIFIER.<br/>
+          Optional text to prepend to the name of each environment variable.
+May consist of any printable ASCII characters except '='.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -5564,7 +5835,7 @@ More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-co
           Claims lists the names of resources, defined in spec.resourceClaims,
 that are used by this container.
 
-This is an alpha field and requires enabling the
+This field depends on the
 DynamicResourceAllocation feature gate.
 
 This field is immutable. It can only be set for containers.<br/>
@@ -5624,6 +5895,82 @@ inside a container.<br/>
           Request is the name chosen for a request in the referenced claim.
 If empty, everything from the claim is made available, otherwise
 only the result of this request.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Ironic.spec.overrides.initContainers[index].restartPolicyRules[index]
+<sup><sup>[↩ Parent](#ironicspecoverridesinitcontainersindex)</sup></sup>
+
+
+
+ContainerRestartRule describes how a container exit is handled.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>action</b></td>
+        <td>string</td>
+        <td>
+          Specifies the action taken on a container exit if the requirements
+are satisfied. The only possible value is "Restart" to restart the
+container.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b><a href="#ironicspecoverridesinitcontainersindexrestartpolicyrulesindexexitcodes">exitCodes</a></b></td>
+        <td>object</td>
+        <td>
+          Represents the exit codes to check on container exits.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Ironic.spec.overrides.initContainers[index].restartPolicyRules[index].exitCodes
+<sup><sup>[↩ Parent](#ironicspecoverridesinitcontainersindexrestartpolicyrulesindex)</sup></sup>
+
+
+
+Represents the exit codes to check on container exits.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>operator</b></td>
+        <td>string</td>
+        <td>
+          Represents the relationship between the container exit code(s) and the
+specified values. Possible values are:
+- In: the requirement is satisfied if the container exit code is in the
+  set of specified values.
+- NotIn: the requirement is satisfied if the container exit code is
+  not in the set of specified values.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>values</b></td>
+        <td>[]integer</td>
+        <td>
+          Specifies the set of values to check for container exit codes.
+At most 255 elements are allowed.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -6471,6 +6818,60 @@ SubPathExpr and SubPath are mutually exclusive.<br/>
 </table>
 
 
+### Ironic.spec.prometheusExporter
+<sup><sup>[↩ Parent](#ironicspec)</sup></sup>
+
+
+
+PrometheusExporter configures sensor data collection and Prometheus metrics export.
+When enabled, this configures Ironic to collect sensor data and deploys the
+ironic-prometheus-exporter container.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>enabled</b></td>
+        <td>boolean</td>
+        <td>
+          Enabled controls whether sensor data collection and metrics export is active.
+When true, configures Ironic to collect sensor data and deploys the
+ironic-prometheus-exporter container.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>disableServiceMonitor</b></td>
+        <td>boolean</td>
+        <td>
+          DisableServiceMonitor controls whether a ServiceMonitor resource is created.
+Set to true if your cluster does not have prometheus-operator installed,
+or when you want to run the exporter but manage Prometheus configuration manually.
+
+Must be set to true for a highly available deployment. In this case, every replica
+provides different metrics, which must be aggregated on the consumer side.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>sensorCollectionInterval</b></td>
+        <td>integer</td>
+        <td>
+          SensorCollectionInterval defines how often (in seconds) sensor data
+is collected from BMCs using Ironic. Must be at least 60 seconds.<br/>
+          <br/>
+            <i>Default</i>: 60<br/>
+            <i>Minimum</i>: 60<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
 ### Ironic.spec.tls
 <sup><sup>[↩ Parent](#ironicspec)</sup></sup>
 
@@ -6521,6 +6922,17 @@ Without it, the certificate must be valid for all IP addresses on
 which Ironic replicas may end up running.
 Has no effect when HighAvailability is false and requires the
 HighAvailability feature gate to be set.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>trustedCAName</b></td>
+        <td>string</td>
+        <td>
+          TrustedCAName is a reference to the configmap with the CA certificate(s)
+to use when validating TLS connections to image servers and other services.
+The configmap should contain one or more CA certificates in PEM format.
+If the configmap contains multiple keys, only the first key will be used and
+a warning will be logged.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
