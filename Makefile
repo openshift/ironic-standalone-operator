@@ -350,3 +350,10 @@ release: kustomize
 	cd config/manager && $(KUSTOMIZE) edit set image quay.io/metal3-io/ironic-standalone-operator="$(IMG_NO_TAG):${RELEASE_TAG}"
 	$(MAKE) release-manifests
 	$(MAKE) release-notes
+
+
+.PHONY: vendor
+vendor:
+	cd api; go mod vendor
+	cd test; go mod vendor
+	go mod vendor
