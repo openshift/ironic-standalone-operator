@@ -64,13 +64,13 @@ func TestWithIronicOverrides(t *testing.T) {
 
 			Ironic: metal3api.Ironic{
 				Spec: metal3api.IronicSpec{
-					Version: "32.0",
+					Version: "33.0",
 				},
 			},
 
 			Expected: VersionInfo{
-				InstalledVersion:       metal3api.Version320,
-				IronicImage:            "quay.io/metal3-io/ironic:release-32.0",
+				InstalledVersion:       metal3api.Version330,
+				IronicImage:            "quay.io/metal3-io/ironic:release-33.0",
 				KeepalivedImage:        "quay.io/metal3-io/keepalived:latest",
 				RamdiskDownloaderImage: "quay.io/metal3-io/ironic-ipa-downloader:latest",
 				MariaDBImage:           "quay.io/metal3-io/mariadb:latest",
@@ -81,13 +81,13 @@ func TestWithIronicOverrides(t *testing.T) {
 
 			Ironic: metal3api.Ironic{
 				Spec: metal3api.IronicSpec{
-					Version: "31.0",
+					Version: "32.0",
 				},
 			},
 
 			Expected: VersionInfo{
-				InstalledVersion:       metal3api.Version310,
-				IronicImage:            "quay.io/metal3-io/ironic:release-31.0",
+				InstalledVersion:       metal3api.Version320,
+				IronicImage:            "quay.io/metal3-io/ironic:release-32.0",
 				KeepalivedImage:        "quay.io/metal3-io/keepalived:latest",
 				RamdiskDownloaderImage: "quay.io/metal3-io/ironic-ipa-downloader:latest",
 				MariaDBImage:           "quay.io/metal3-io/mariadb:latest",
@@ -141,27 +141,15 @@ func TestPrometheusExporterVersionCheck(t *testing.T) {
 			expectedError: "",
 		},
 		{
+			name:          "PrometheusExporter with version 33.0",
+			version:       metal3api.Version330,
+			enabled:       true,
+			expectedError: "",
+		},
+		{
 			name:          "PrometheusExporter with latest version",
 			version:       metal3api.VersionLatest,
 			enabled:       true,
-			expectedError: "",
-		},
-		{
-			name:          "PrometheusExporter with version 30.0 (too old)",
-			version:       metal3api.Version300,
-			enabled:       true,
-			expectedError: "using prometheusExporter is only possible for Ironic 31.0 or newer",
-		},
-		{
-			name:          "PrometheusExporter disabled with version 30.0",
-			version:       metal3api.Version300,
-			enabled:       false,
-			expectedError: "",
-		},
-		{
-			name:          "PrometheusExporter not configured with version 30.0",
-			version:       metal3api.Version300,
-			enabled:       false,
 			expectedError: "",
 		},
 	}
@@ -207,6 +195,11 @@ func TestBMCCAVersionCheck(t *testing.T) {
 		expectedError string
 	}{
 		{
+			name:          "BMCCA with version 33.0",
+			version:       metal3api.Version330,
+			expectedError: "",
+		},
+		{
 			name:          "BMCCA with version 32.0",
 			version:       metal3api.Version320,
 			expectedError: "",
@@ -219,11 +212,6 @@ func TestBMCCAVersionCheck(t *testing.T) {
 		{
 			name:          "BMCCA with version 31.0 (too old)",
 			version:       metal3api.Version310,
-			expectedError: "using tls.bmcCAName is only possible for Ironic 32.0 or newer",
-		},
-		{
-			name:          "BMCCA with version 30.0 (too old)",
-			version:       metal3api.Version300,
 			expectedError: "using tls.bmcCAName is only possible for Ironic 32.0 or newer",
 		},
 	}
