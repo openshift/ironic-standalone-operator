@@ -29,4 +29,4 @@ bin/
 out/
 
 # ai stuff
-.claude
+.claude/settings.local.json
