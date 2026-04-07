@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/go-logr/logr"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -34,7 +35,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/go-logr/logr"
 	metal3api "github.com/metal3-io/ironic-standalone-operator/api/v1alpha1"
 	"github.com/metal3-io/ironic-standalone-operator/pkg/ironic"
 	"github.com/metal3-io/ironic-standalone-operator/pkg/secretutils"
@@ -60,7 +60,7 @@ type IronicReconciler struct {
 //+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 //+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;delete
-//+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;update
 //+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;delete
 //+kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 
@@ -113,7 +113,7 @@ func (r *IronicReconciler) handleIronic(cctx ironic.ControllerContext, ironicCon
 	if ironicConf.DeletionTimestamp.IsZero() {
 		requeue, err = ensureFinalizer(cctx, ironicConf)
 		if requeue || err != nil {
-			return
+			return requeue, err
 		}
 	} else {
 		return r.cleanUp(cctx, ironicConf)
@@ -149,20 +149,20 @@ func (r *IronicReconciler) handleIronic(cctx ironic.ControllerContext, ironicCon
 		ironicConf.Status.RequestedVersion = actuallyRequestedVersion
 		err = r.setNotReady(cctx, ironicConf, metal3api.IronicReasonInProgress, "new version requested")
 		if err != nil {
-			return
+			return requeue, err
 		}
 	}
 
 	apiSecret, requeue, err := r.ensureAPISecret(cctx, ironicConf)
 	if requeue || err != nil {
-		return
+		return requeue, err
 	}
 
 	var tlsSecret *corev1.Secret
 	if tlsSecretName := ironicConf.Spec.TLS.CertificateName; tlsSecretName != "" {
 		tlsSecret, requeue, err = r.getAndUpdateSecret(cctx, ironicConf, tlsSecretName)
 		if requeue || err != nil {
-			return
+			return requeue, err
 		}
 	}
 
@@ -170,7 +170,7 @@ func (r *IronicReconciler) handleIronic(cctx ironic.ControllerContext, ironicCon
 	if bmcSecretName := ironicConf.Spec.TLS.BMCCAName; bmcSecretName != "" {
 		bmcSecret, requeue, err = r.getAndUpdateSecret(cctx, ironicConf, bmcSecretName)
 		if requeue || err != nil {
-			return
+			return requeue, err
 		}
 	}
 
@@ -178,7 +178,7 @@ func (r *IronicReconciler) handleIronic(cctx ironic.ControllerContext, ironicCon
 	if trustedCAConfigMapName := ironicConf.Spec.TLS.TrustedCAName; trustedCAConfigMapName != "" {
 		trustedCAConfigMap, requeue, err = r.getConfigMap(cctx, ironicConf, trustedCAConfigMapName)
 		if requeue || err != nil {
-			return
+			return requeue, err
 		}
 	}
 
@@ -193,7 +193,7 @@ func (r *IronicReconciler) handleIronic(cctx ironic.ControllerContext, ironicCon
 	status, err := ironic.EnsureIronic(cctx, resources)
 	if err != nil {
 		cctx.Logger.Error(err, "potentially transient error, will retry")
-		return
+		return requeue, err
 	}
 
 	newStatus := ironicConf.Status.DeepCopy()
@@ -208,7 +208,7 @@ func (r *IronicReconciler) handleIronic(cctx ironic.ControllerContext, ironicCon
 		ironicConf.Status = *newStatus
 		err = cctx.Client.Status().Update(cctx.Context, ironicConf)
 	}
-	return
+	return requeue, err
 }
 
 // Get a secret and update its owner references using SecretManager.
@@ -242,8 +242,9 @@ func (r *IronicReconciler) getConfigMap(cctx ironic.ControllerContext, ironicCon
 		Namespace: ironicConf.Namespace,
 		Name:      configMapName,
 	}
-	configMap = &corev1.ConfigMap{}
-	err = cctx.Client.Get(cctx.Context, namespacedName, configMap)
+
+	secretManager := secretutils.NewSecretManager(cctx.Context, cctx.Logger, cctx.Client, r.APIReader)
+	configMap, err = secretManager.ObtainConfigMap(namespacedName)
 	if err != nil {
 		// NotFound requires a user's intervention, so reporting it in the conditions.
 		// Everything else is reported up for a retry.
@@ -274,7 +275,7 @@ func (r *IronicReconciler) ensureAPISecret(cctx ironic.ControllerContext, ironic
 		}
 
 		requeue = true
-		return
+		return apiSecret, requeue, err
 	}
 
 	apiSecret, requeue, err = r.getAndUpdateSecret(cctx, ironicConf, ironicConf.Spec.APICredentialsName)
@@ -292,7 +293,7 @@ func (r *IronicReconciler) ensureAPISecret(cctx ironic.ControllerContext, ironic
 		err = cctx.Client.Update(cctx.Context, apiSecret)
 	}
 
-	return
+	return apiSecret, requeue, err
 }
 
 func (r *IronicReconciler) cleanUp(cctx ironic.ControllerContext, ironicConf *metal3api.Ironic) (bool, error) {

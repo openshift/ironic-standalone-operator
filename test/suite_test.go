@@ -60,13 +60,13 @@ import (
 // every time the API is changed. The listing of all versions is here:
 // https://docs.openstack.org/ironic/latest/contributor/webapi-version-history.html
 const (
-	// NOTE(dtantsur): latest is now at least 1.99, so we can rely on this
-	// value to check that specifying Version: 33.0 actually installs 33.0.
-	apiVersionIn310 = "1.99"
+	// NOTE(dtantsur): latest is now at least 1.101, so we can rely on this
+	// value to check that specifying Version: 34.0 actually installs 34.0.
 	apiVersionIn320 = "1.101"
 	apiVersionIn330 = "1.104"
+	apiVersionIn340 = "1.109"
 	// Update this periodically to make sure we're installing the latest version by default.
-	knownAPIMinorVersion = 104
+	knownAPIMinorVersion = 109
 
 	numberOfNodes = 100
 
@@ -257,9 +257,9 @@ func WaitForUpgrade(name types.NamespacedName, toVersion string) *metal3api.Iron
 
 			// See https://github.com/metal3-io/ironic-standalone-operator/issues/304
 			return !podsAreBeingDeleted(ctx, name.Namespace, name.Name)
-		} else {
-			Expect(upgraded).To(BeFalse(), "InstalledVersion set before the Ready condition")
 		}
+
+		Expect(upgraded).To(BeFalse(), "InstalledVersion set before the Ready condition")
 
 		logResources(ironic, suffix)
 		return false
@@ -303,13 +303,13 @@ func WaitForIronicFailure(name types.NamespacedName, message string, tolerateRea
 
 func writeYAML(obj interface{}, namespace, name, typ string) {
 	fileDir := fmt.Sprintf("%s/%s", os.Getenv("LOGDIR"), namespace)
-	err := os.MkdirAll(fileDir, 0o755)
+	err := os.MkdirAll(fileDir, 0o755) //nolint:gosec // path derived from trusted LOGDIR env var
 	Expect(err).NotTo(HaveOccurred())
 
 	fileName := fmt.Sprintf("%s/%s_%s.yaml", fileDir, typ, name)
 	yamlData, err := yaml.Marshal(obj)
 	Expect(err).NotTo(HaveOccurred())
-	err = os.WriteFile(fileName, yamlData, 0o600)
+	err = os.WriteFile(fileName, yamlData, 0o600) //nolint:gosec // path derived from trusted LOGDIR env var
 	Expect(err).NotTo(HaveOccurred())
 }
 
@@ -596,7 +596,7 @@ func writeContainerLogs(pod *corev1.Pod, containerName, logDir string) {
 	defer podLogs.Close()
 
 	targetFileName := fmt.Sprintf("%s/%s.log", logDir, containerName)
-	logFile, err := os.Create(targetFileName)
+	logFile, err := os.Create(targetFileName) //nolint:gosec // path derived from trusted LOGDIR env var
 	Expect(err).NotTo(HaveOccurred())
 	defer logFile.Close()
 
@@ -638,7 +638,7 @@ func CollectLogs(namespace string) {
 
 	for _, pod := range pods.Items {
 		logDir := fmt.Sprintf("%s/%s/pod_%s", os.Getenv("LOGDIR"), namespace, pod.Name)
-		err = os.MkdirAll(logDir, 0o755)
+		err = os.MkdirAll(logDir, 0o755) //nolint:gosec // path derived from trusted LOGDIR env var
 		Expect(err).NotTo(HaveOccurred())
 
 		writeYAML(&pod, namespace, pod.Name, "pod")
@@ -656,7 +656,7 @@ func CollectLogs(namespace string) {
 
 	for _, rset := range rsets.Items {
 		logDir := fmt.Sprintf("%s/%s/replicaset_%s", os.Getenv("LOGDIR"), namespace, rset.Name)
-		err = os.MkdirAll(logDir, 0o755)
+		err = os.MkdirAll(logDir, 0o755) //nolint:gosec // path derived from trusted LOGDIR env var
 		Expect(err).NotTo(HaveOccurred())
 
 		writeYAML(&rset, namespace, rset.Name, "replicaset")
@@ -667,7 +667,7 @@ func CollectLogs(namespace string) {
 
 	for _, job := range jobs.Items {
 		logDir := fmt.Sprintf("%s/%s/job_%s", os.Getenv("LOGDIR"), namespace, job.Name)
-		err = os.MkdirAll(logDir, 0o755)
+		err = os.MkdirAll(logDir, 0o755) //nolint:gosec // path derived from trusted LOGDIR env var
 		Expect(err).NotTo(HaveOccurred())
 
 		writeYAML(&job, namespace, job.Name, "job")
@@ -713,7 +713,7 @@ func saveEvents(namespace string) {
 	Expect(err).NotTo(HaveOccurred())
 
 	targetFileName := fmt.Sprintf("%s/%s/events.yaml", os.Getenv("LOGDIR"), namespace)
-	logFile, err := os.Create(targetFileName)
+	logFile, err := os.Create(targetFileName) //nolint:gosec // path derived from trusted LOGDIR env var
 	Expect(err).NotTo(HaveOccurred())
 	defer logFile.Close()
 
@@ -938,60 +938,19 @@ var _ = Describe("Ironic object tests", func() {
 		VerifyIronic(ironic, TestAssumptions{withTLS: true})
 	})
 
-	It("creates Ironic 31.0 and upgrades to 32.0", Label("v310-to-320", "upgrade"), func() {
-		testUpgrade("31.0", "32.0", apiVersionIn310, apiVersionIn320, namespace)
-	})
-
 	It("creates Ironic 32.0 and upgrades to 33.0", Label("v320-to-330", "upgrade"), func() {
 		testUpgrade("32.0", "33.0", apiVersionIn320, apiVersionIn330, namespace)
 	})
 
-	It("creates Ironic 33.0 and upgrades to latest", Label("v330-to-latest", "upgrade"), func() {
-		testUpgrade("33.0", "latest", apiVersionIn330, "", namespace)
+	It("creates Ironic 33.0 and upgrades to 34.0", Label("v330-to-340", "upgrade"), func() {
+		testUpgrade("33.0", "34.0", apiVersionIn330, apiVersionIn340, namespace)
 	})
 
-	It("creates Ironic 31.0 with database, then upgrades it to 32.0, then 33.0", Label("db-v310-to-320-to-330", "upgrade"), func() {
-		helpers.SkipIfCustomImage()
-
-		name := types.NamespacedName{
-			Name:      "test-ironic",
-			Namespace: namespace,
-		}
-
-		ironic := helpers.NewIronic(ctx, k8sClient, name, metal3api.IronicSpec{
-			Database: helpers.CreateDatabase(ctx, k8sClient, name),
-			Version:  "31.0",
-		})
-		DeferCleanup(func() {
-			CollectLogs(namespace)
-			DeleteAndWait(ironic)
-		})
-
-		ironic = WaitForIronic(name)
-		VerifyIronic(ironic, TestAssumptions{maxAPIVersion: apiVersionIn310})
-
-		By("upgrading to Ironic 32.0")
-
-		patch := client.MergeFrom(ironic.DeepCopy())
-		ironic.Spec.Version = "32.0"
-		err := k8sClient.Patch(ctx, ironic, patch)
-		Expect(err).NotTo(HaveOccurred())
-
-		ironic = WaitForUpgrade(name, "32.0")
-		VerifyIronic(ironic, TestAssumptions{maxAPIVersion: apiVersionIn320})
-
-		By("upgrading to Ironic 33.0")
-
-		patch = client.MergeFrom(ironic.DeepCopy())
-		ironic.Spec.Version = "33.0"
-		err = k8sClient.Patch(ctx, ironic, patch)
-		Expect(err).NotTo(HaveOccurred())
-
-		ironic = WaitForUpgrade(name, "33.0")
-		VerifyIronic(ironic, TestAssumptions{maxAPIVersion: apiVersionIn330})
+	It("creates Ironic 34.0 and upgrades to latest", Label("v340-to-latest", "upgrade"), func() {
+		testUpgrade("34.0", "latest", apiVersionIn340, "", namespace)
 	})
 
-	It("refuses to downgrade Ironic with a database", Label("no-db-downgrade", "upgrade"), func() {
+	It("creates Ironic 32.0 with database, then upgrades it to 33.0, then 34.0", Label("db-v320-to-330-to-340", "upgrade"), func() {
 		helpers.SkipIfCustomImage()
 
 		name := types.NamespacedName{
@@ -1011,26 +970,67 @@ var _ = Describe("Ironic object tests", func() {
 		ironic = WaitForIronic(name)
 		VerifyIronic(ironic, TestAssumptions{maxAPIVersion: apiVersionIn320})
 
-		By("downgrading to Ironic 31.0")
+		By("upgrading to Ironic 33.0")
 
 		patch := client.MergeFrom(ironic.DeepCopy())
-		ironic.Spec.Version = "31.0"
+		ironic.Spec.Version = "33.0"
+		err := k8sClient.Patch(ctx, ironic, patch)
+		Expect(err).NotTo(HaveOccurred())
+
+		ironic = WaitForUpgrade(name, "33.0")
+		VerifyIronic(ironic, TestAssumptions{maxAPIVersion: apiVersionIn330})
+
+		By("upgrading to Ironic 34.0")
+
+		patch = client.MergeFrom(ironic.DeepCopy())
+		ironic.Spec.Version = "34.0"
+		err = k8sClient.Patch(ctx, ironic, patch)
+		Expect(err).NotTo(HaveOccurred())
+
+		ironic = WaitForUpgrade(name, "34.0")
+		VerifyIronic(ironic, TestAssumptions{maxAPIVersion: apiVersionIn340})
+	})
+
+	It("refuses to downgrade Ironic with a database", Label("no-db-downgrade", "upgrade"), func() {
+		helpers.SkipIfCustomImage()
+
+		name := types.NamespacedName{
+			Name:      "test-ironic",
+			Namespace: namespace,
+		}
+
+		ironic := helpers.NewIronic(ctx, k8sClient, name, metal3api.IronicSpec{
+			Database: helpers.CreateDatabase(ctx, k8sClient, name),
+			Version:  "33.0",
+		})
+		DeferCleanup(func() {
+			CollectLogs(namespace)
+			DeleteAndWait(ironic)
+		})
+
+		ironic = WaitForIronic(name)
+		VerifyIronic(ironic, TestAssumptions{maxAPIVersion: apiVersionIn330})
+
+		By("downgrading to Ironic 32.0")
+
+		patch := client.MergeFrom(ironic.DeepCopy())
+		ironic.Spec.Version = "32.0"
 		err := k8sClient.Patch(ctx, ironic, patch)
 		Expect(err).NotTo(HaveOccurred())
 
 		WaitForIronicFailure(name, "Ironic does not support downgrades", true)
 	})
 
-	It("creates Ironic 31.0 with HA and upgrades to 32.0", Label("ha-v310-to-320", "ha", "upgrade"), func() {
-		testUpgradeHA("31.0", "32.0", apiVersionIn310, apiVersionIn320, namespace)
-	})
-
 	It("creates Ironic 32.0 with HA and upgrades to 33.0", Label("ha-v320-to-330", "ha", "upgrade"), func() {
 		testUpgradeHA("32.0", "33.0", apiVersionIn320, apiVersionIn330, namespace)
 	})
 
-	It("creates Ironic 33.0 with HA and upgrades to latest", Label("ha-v330-to-latest", "ha", "upgrade"), func() {
-		testUpgradeHA("33.0", "latest", apiVersionIn330, "", namespace)
+	It("creates Ironic 33.0 with HA and upgrades to 34.0", Label("ha-v330-to-340", "ha", "upgrade"), func() {
+		testUpgradeHA("33.0", "34.0", apiVersionIn330, apiVersionIn340, namespace)
+	})
+
+	It("creates Ironic 34.0 with HA and upgrades to latest", Label("ha-v340-to-latest", "ha", "upgrade"), func() {
+		testUpgradeHA("34.0", "latest", apiVersionIn340, "", namespace)
 	})
 
 	It("creates Ironic with keepalived and DHCP", Label("keepalived-dnsmasq"), func() {

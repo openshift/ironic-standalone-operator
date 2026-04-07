@@ -40,19 +40,65 @@ popd
 
 # Installing MariaDB operator
 
-"${HELM}" repo add mariadb-operator https://helm.mariadb.com/mariadb-operator
-"${HELM}" install mariadb-operator-crds mariadb-operator/mariadb-operator-crds \
-    --version "${MARIADB_OPERATOR_VERSION}"
-"${HELM}" install mariadb-operator mariadb-operator/mariadb-operator \
-    --namespace mariadb-operator --create-namespace \
-    --set webhook.cert.certManager.enabled=true \
-    --version "${MARIADB_OPERATOR_VERSION}"
+# Add MariaDB Operator repository using direct GitHub Pages URL
+"${HELM}" repo add mariadb-operator https://mariadb-operator.github.io/mariadb-operator
+"${HELM}" repo update mariadb-operator
+
+# Install MariaDB Operator CRDs with retries
+echo "Installing MariaDB Operator CRDs..."
+for i in {1..5}; do
+    if "${HELM}" install mariadb-operator-crds mariadb-operator/mariadb-operator-crds \
+        --version "${MARIADB_OPERATOR_VERSION}"; then
+        break
+    fi
+    echo "Attempt $i failed, retrying in 10s..."
+    sleep 10
+
+    if [[ "$i" -eq 5 ]]; then
+        echo "ERROR: Failed to install MariaDB CRDs after 5 attempts."
+        exit 1
+    fi
+done
+
+# Install MariaDB Operator with retries
+echo "Installing MariaDB Operator..."
+for i in {1..5}; do
+    if "${HELM}" install mariadb-operator mariadb-operator/mariadb-operator \
+        --namespace mariadb-operator --create-namespace \
+        --version "${MARIADB_OPERATOR_VERSION}" \
+        --set webhook.cert.certManager.enabled=true \
+        --set certController.enabled=false; then
+        break
+    fi
+    echo "Attempt $i failed, retrying in 10s..."
+    sleep 10
+
+    if [[ "$i" -eq 5 ]]; then
+        echo "ERROR: Failed to install MariaDB Operator after 5 attempts."
+        exit 1
+    fi
+done
 
 # Caching required images
 
 for image in ironic ironic-ipa-downloader keepalived; do
     image_pull "${image}"
 done
+
+# Predownloading IPA image and serving it locally (see #574)
+
+IPA_FILE="ipa-centos9-master.tar.gz"
+IPA_REMOTE_URI="https://artifactory.nordix.org/artifactory/openstack-remote-cache/ironic-python-agent/dib"
+
+mkdir -p "${IPA_DIR}"
+if [[ ! -f "${IPA_DIR}/${IPA_FILE}" ]]; then
+    curl -Lo "${IPA_DIR}/${IPA_FILE}" "${IPA_REMOTE_URI}/${IPA_FILE}"
+fi
+
+IPA_HOST_IP=$(ipa_host_ip)
+
+IPA_BASEURI="http://${IPA_HOST_IP}:${IPA_SERVER_PORT}"
+sed -i "s|IRSO_IPA_BASEURI|${IPA_BASEURI}|" config/testing/manager_irso_config_patch.yaml
 
 # Building and installing the operator
 
