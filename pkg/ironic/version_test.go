@@ -64,13 +64,13 @@ func TestWithIronicOverrides(t *testing.T) {
 
 			Ironic: metal3api.Ironic{
 				Spec: metal3api.IronicSpec{
-					Version: "33.0",
+					Version: "34.0",
 				},
 			},
 
 			Expected: VersionInfo{
-				InstalledVersion:       metal3api.Version330,
-				IronicImage:            "quay.io/metal3-io/ironic:release-33.0",
+				InstalledVersion:       metal3api.Version340,
+				IronicImage:            "quay.io/metal3-io/ironic:release-34.0",
 				KeepalivedImage:        "quay.io/metal3-io/keepalived:latest",
 				RamdiskDownloaderImage: "quay.io/metal3-io/ironic-ipa-downloader:latest",
 				MariaDBImage:           "quay.io/metal3-io/mariadb:latest",
@@ -81,13 +81,13 @@ func TestWithIronicOverrides(t *testing.T) {
 
 			Ironic: metal3api.Ironic{
 				Spec: metal3api.IronicSpec{
-					Version: "32.0",
+					Version: "33.0",
 				},
 			},
 
 			Expected: VersionInfo{
-				InstalledVersion:       metal3api.Version320,
-				IronicImage:            "quay.io/metal3-io/ironic:release-32.0",
+				InstalledVersion:       metal3api.Version330,
+				IronicImage:            "quay.io/metal3-io/ironic:release-33.0",
 				KeepalivedImage:        "quay.io/metal3-io/keepalived:latest",
 				RamdiskDownloaderImage: "quay.io/metal3-io/ironic-ipa-downloader:latest",
 				MariaDBImage:           "quay.io/metal3-io/mariadb:latest",
@@ -129,12 +129,6 @@ func TestPrometheusExporterVersionCheck(t *testing.T) {
 		expectedError string
 	}{
 		{
-			name:          "PrometheusExporter with version 31.0",
-			version:       metal3api.Version310,
-			enabled:       true,
-			expectedError: "",
-		},
-		{
 			name:          "PrometheusExporter with version 32.0",
 			version:       metal3api.Version320,
 			enabled:       true,
@@ -143,6 +137,12 @@ func TestPrometheusExporterVersionCheck(t *testing.T) {
 		{
 			name:          "PrometheusExporter with version 33.0",
 			version:       metal3api.Version330,
+			enabled:       true,
+			expectedError: "",
+		},
+		{
+			name:          "PrometheusExporter with version 34.0",
+			version:       metal3api.Version340,
 			enabled:       true,
 			expectedError: "",
 		},
@@ -195,6 +195,11 @@ func TestBMCCAVersionCheck(t *testing.T) {
 		expectedError string
 	}{
 		{
+			name:          "BMCCA with version 34.0",
+			version:       metal3api.Version340,
+			expectedError: "",
+		},
+		{
 			name:          "BMCCA with version 33.0",
 			version:       metal3api.Version330,
 			expectedError: "",
@@ -208,11 +213,6 @@ func TestBMCCAVersionCheck(t *testing.T) {
 			name:          "BMCCA with latest version",
 			version:       metal3api.VersionLatest,
 			expectedError: "",
-		},
-		{
-			name:          "BMCCA with version 31.0 (too old)",
-			version:       metal3api.Version310,
-			expectedError: "using tls.bmcCAName is only possible for Ironic 32.0 or newer",
 		},
 	}
 

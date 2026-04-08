@@ -20,20 +20,23 @@ jobs:
     if: github.repository == 'metal3-io/ironic-standalone-operator'
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 # zizmor: ignore[artipacked]
       with:
         fetch-depth: 0
     - name: Get changed files
       id: changed-files
-      uses: tj-actions/changed-files@ed68ef82c095e0d48ec87eccea555d944a631a4c # v46.0.5
+      uses: tj-actions/changed-files@22103cc46bda19c2b464ffe86db46df6922fd323 # v47.0.5
     - name: Get release version
       id: release-version
+      env:
+        STEPS_CHANGED_FILES_OUTPUTS_ALL_CHANGED_FILES_COUNT: ${{ steps.changed-files.outputs.all_changed_files_count }}
+        STEPS_CHANGED_FILES_OUTPUTS_ALL_CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
       run: |
-        if [[ ${{ steps.changed-files.outputs.all_changed_files_count }} != 1 ]]; then
-          echo "1 release notes file should be changed to create a release tag, found ${{ steps.changed-files.outputs.all_changed_files_count }}"
+        if [[ "${STEPS_CHANGED_FILES_OUTPUTS_ALL_CHANGED_FILES_COUNT}" != "1" ]]; then
+          echo "1 release notes file should be changed to create a release tag, found ${STEPS_CHANGED_FILES_OUTPUTS_ALL_CHANGED_FILES_COUNT}"
           exit 1
         fi
-        for changed_file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+        for changed_file in ${STEPS_CHANGED_FILES_OUTPUTS_ALL_CHANGED_FILES}; do
           export RELEASE_VERSION=$(echo "${changed_file}" | grep -oP '(?<=/)[^/]+(?=\.md)')
           echo "RELEASE_VERSION=${RELEASE_VERSION}" >> ${GITHUB_ENV}
           echo "RELEASE_VERSION=${RELEASE_VERSION}" >> ${GITHUB_OUTPUT}
@@ -94,27 +97,29 @@ jobs:
       env:
         RELEASE_TAG: ${{needs.push_release_tags.outputs.release_tag}}
     - name: checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
         fetch-depth: 0
         ref: ${{ env.RELEASE_TAG }}
+        persist-credentials: false
     - name: Calculate go version
       run: echo "go_version=$(make go-version)" >> ${GITHUB_ENV}
     - name: Set up Go
-      uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+      uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
       with:
         go-version: ${{ env.go_version }}
+        cache: false
     - name: generate release artifacts
-      run: |
-        make release
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        make release
     - name: get release notes
       run: |
-        curl -L "https://raw.githubusercontent.com/${{ github.repository }}/main/releasenotes/${{ env.RELEASE_TAG }}.md" \
-        -o "${{ env.RELEASE_TAG }}.md"
+        curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/releasenotes/${RELEASE_TAG}.md" \
+        -o "${RELEASE_TAG}.md"
     - name: Release
-      uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
+      uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0 # zizmor: ignore[superfluous-actions]
       with:
         draft: true
         files: out/*
@@ -127,7 +132,7 @@ jobs:
     needs: push_release_tags
     name: Build IrSO container image
     if: github.repository == 'metal3-io/ironic-standalone-operator'
-    uses: metal3-io/project-infra/.github/workflows/container-image-build.yml@main
+    uses: metal3-io/project-infra/.github/workflows/container-image-build.yml@main # zizmor: ignore[unpinned-uses]
     with:
       image-name: 'ironic-standalone-operator'
       pushImage: true

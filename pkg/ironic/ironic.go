@@ -3,7 +3,6 @@ package ironic
 import (
 	"context"
 
-	metal3api "github.com/metal3-io/ironic-standalone-operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -11,6 +10,8 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	metal3api "github.com/metal3-io/ironic-standalone-operator/api/v1alpha1"
 )
 
 const (
@@ -179,12 +180,12 @@ func removeIronicDeployment(cctx ControllerContext, ironic *metal3api.Ironic) er
 func EnsureIronic(cctx ControllerContext, resources Resources) (status Status, err error) {
 	if validationErr := ValidateIronic(&resources.Ironic.Spec, nil); validationErr != nil {
 		status = Status{Fatal: validationErr}
-		return
+		return status, nil //nolint:nilerr // validation errors are reported in status, not as return error
 	}
 
 	if validationErr := checkVersion(resources, cctx.VersionInfo.InstalledVersion); validationErr != nil {
 		status = Status{Fatal: validationErr}
-		return
+		return status, nil //nolint:nilerr // validation errors are reported in status, not as return error
 	}
 
 	if resources.Ironic.Spec.Database != nil {
@@ -198,19 +199,19 @@ func EnsureIronic(cctx ControllerContext, resources Resources) (status Status, e
 	if resources.Ironic.Spec.HighAvailability {
 		err = removeIronicDeployment(cctx, resources.Ironic)
 		if err != nil {
-			return
+			return status, err
 		}
 		status, err = ensureIronicDaemonSet(cctx, resources)
 	} else {
 		err = removeIronicDaemonSet(cctx, resources.Ironic)
 		if err != nil {
-			return
+			return status, err
 		}
 		status, err = ensureIronicDeployment(cctx, resources)
 	}
 
 	if err != nil || status.IsError() {
-		return
+		return status, err
 	}
 
 	// Let the service be created while Ironic is being deployed, but do
@@ -234,10 +235,10 @@ func EnsureIronic(cctx ControllerContext, resources Resources) (status Status, e
 		return smStatus, err
 	}
 
-	return
+	return status, err
 }
 
 // RemoveIronic removes all bits of the Ironic deployment.
-func RemoveIronic(cctx ControllerContext, ironic *metal3api.Ironic) error {
+func RemoveIronic(_ ControllerContext, _ *metal3api.Ironic) error {
 	return nil // rely on ownership-based clean up
 }

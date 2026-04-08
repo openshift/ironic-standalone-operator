@@ -10,13 +10,14 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
-	metal3api "github.com/metal3-io/ironic-standalone-operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	metal3api "github.com/metal3-io/ironic-standalone-operator/api/v1alpha1"
 )
 
 const (
@@ -24,13 +25,18 @@ const (
 	probeTimeout          = 5
 	probeFailureThreshold = 12
 
-	dataDir        = "/data"
-	confDir        = "/conf"
-	tmpDir         = "/tmp"
-	dataVolumeName = "ironic-data"
-	tmpVolumeName  = "ironic-tmp"
+	dataDir          = "/data"
+	confDir          = "/conf"
+	tmpDir           = "/tmp"
+	dataVolumeName   = "ironic-data"
+	tmpVolumeName    = "ironic-tmp"
+	protoHTTP        = "http"
+	protoHTTPS       = "https"
+	httpDefaultPort  = 80
+	httpsDefaultPort = 443
 )
 
+//nolint:containedctx // Context is intentionally stored for use throughout the controller lifecycle
 type ControllerContext struct {
 	Context     context.Context
 	Client      client.Client
@@ -141,10 +147,10 @@ func getDeploymentStatus(cctx ControllerContext, deploy *appsv1.Deployment) (Sta
 
 	if available && updated {
 		return ready()
-	} else {
-		cctx.Logger.Info("deployment not available yet", "Deployment", deploy.Name, "Status", deploy.Status)
-		return inProgress("deployment not available yet")
 	}
+
+	cctx.Logger.Info("deployment not available yet", "Deployment", deploy.Name, "Status", deploy.Status)
+	return inProgress("deployment not available yet")
 }
 
 func getDaemonSetStatus(cctx ControllerContext, deploy *appsv1.DaemonSet) (Status, error) {
@@ -163,15 +169,15 @@ func getDaemonSetStatus(cctx ControllerContext, deploy *appsv1.DaemonSet) (Statu
 
 	if available && updated {
 		return ready()
-	} else {
-		cctx.Logger.Info("daemon set not available yet", "DaemonSet", deploy.Name,
-			"NumberUnavailable", deploy.Status.NumberUnavailable, "UpdatedNumberScheduled", deploy.Status.UpdatedNumberScheduled)
-		if !updated {
-			return inProgress(fmt.Sprintf("daemon set not available yet: %d replicas need updating",
-				deploy.Status.DesiredNumberScheduled-deploy.Status.UpdatedNumberScheduled))
-		}
-		return inProgress(fmt.Sprintf("daemon set not available yet: %d replicas unavailable", deploy.Status.NumberUnavailable))
 	}
+
+	cctx.Logger.Info("daemon set not available yet", "DaemonSet", deploy.Name,
+		"NumberUnavailable", deploy.Status.NumberUnavailable, "UpdatedNumberScheduled", deploy.Status.UpdatedNumberScheduled)
+	if !updated {
+		return inProgress(fmt.Sprintf("daemon set not available yet: %d replicas need updating",
+			deploy.Status.DesiredNumberScheduled-deploy.Status.UpdatedNumberScheduled))
+	}
+	return inProgress(fmt.Sprintf("daemon set not available yet: %d replicas unavailable", deploy.Status.NumberUnavailable))
 }
 
 func getServiceStatus(service *corev1.Service) (Status, error) {
@@ -204,7 +210,7 @@ func buildEndpoints(ips []string, port int, includeProto string) (endpoints []st
 	portString := strconv.Itoa(port)
 	for _, ip := range ips {
 		var endpoint string
-		if (includeProto == "https" && port == 443) || (includeProto == "http" && port == 80) {
+		if (includeProto == protoHTTPS && port == httpsDefaultPort) || (includeProto == protoHTTP && port == httpDefaultPort) {
 			if strings.Contains(ip, ":") {
 				endpoint = fmt.Sprintf("%s://[%s]", includeProto, ip) // IPv6
 			} else {
@@ -229,10 +235,17 @@ func updateProbe(current *corev1.Probe, handler corev1.ProbeHandler) *corev1.Pro
 	}
 	current.ProbeHandler = handler
 	// NOTE(dtantsur): we want some delay because Ironic does not start instantly.
-	// Also be conservative about failing the pod since Ironic restars are not cheap (the database is wiped).
-	current.InitialDelaySeconds = probeInitialDelay
-	current.TimeoutSeconds = probeTimeout
-	current.FailureThreshold = probeFailureThreshold
+	// Also be conservative about failing the pod since Ironic restarts are not cheap (the database is wiped).
+	// Only apply defaults for fields the user has not explicitly set (zero value = not set).
+	if current.InitialDelaySeconds == 0 {
+		current.InitialDelaySeconds = probeInitialDelay
+	}
+	if current.TimeoutSeconds == 0 {
+		current.TimeoutSeconds = probeTimeout
+	}
+	if current.FailureThreshold == 0 {
+		current.FailureThreshold = probeFailureThreshold
+	}
 	return current
 }
 
