@@ -34,6 +34,7 @@ git merge --no-ff --no-commit upstream/main
 
 **GitHub Workflows**: Downstream typically removes `.github/` directory files. If conflicts occur:
 - Keep the downstream version (usually removal)
+- Do not introduce any workflows that are not present downstream
 - Verify with `git diff downstream/main -- .github/`
 
 **Downstream-Specific Changes**: Look for commit messages starting with:
