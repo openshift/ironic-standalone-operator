@@ -5,7 +5,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	metal3api "github.com/metal3-io/ironic-standalone-operator/api/v1alpha1"
@@ -32,7 +31,6 @@ func TestWithIronicOverrides(t *testing.T) {
 				IronicImage:            "quay.io/metal3-io/ironic:latest",
 				KeepalivedImage:        "quay.io/metal3-io/keepalived:latest",
 				RamdiskDownloaderImage: "quay.io/metal3-io/ironic-ipa-downloader:latest",
-				MariaDBImage:           "quay.io/metal3-io/mariadb:latest",
 			},
 		},
 		{
@@ -56,7 +54,6 @@ func TestWithIronicOverrides(t *testing.T) {
 				IronicImage:            "myorg/ironic:tag",
 				KeepalivedImage:        "myorg/keepalived:tag",
 				RamdiskDownloaderImage: "myorg/ramdisk-downloader:tag",
-				MariaDBImage:           "quay.io/metal3-io/mariadb:latest",
 			},
 		},
 		{
@@ -64,16 +61,15 @@ func TestWithIronicOverrides(t *testing.T) {
 
 			Ironic: metal3api.Ironic{
 				Spec: metal3api.IronicSpec{
-					Version: "34.0",
+					Version: "38.0",
 				},
 			},
 
 			Expected: VersionInfo{
-				InstalledVersion:       metal3api.Version340,
-				IronicImage:            "quay.io/metal3-io/ironic:release-34.0",
+				InstalledVersion:       metal3api.Version380,
+				IronicImage:            "quay.io/metal3-io/ironic:release-38.0",
 				KeepalivedImage:        "quay.io/metal3-io/keepalived:latest",
 				RamdiskDownloaderImage: "quay.io/metal3-io/ironic-ipa-downloader:latest",
-				MariaDBImage:           "quay.io/metal3-io/mariadb:latest",
 			},
 		},
 		{
@@ -81,16 +77,15 @@ func TestWithIronicOverrides(t *testing.T) {
 
 			Ironic: metal3api.Ironic{
 				Spec: metal3api.IronicSpec{
-					Version: "33.0",
+					Version: "37.0",
 				},
 			},
 
 			Expected: VersionInfo{
-				InstalledVersion:       metal3api.Version330,
-				IronicImage:            "quay.io/metal3-io/ironic:release-33.0",
+				InstalledVersion:       metal3api.Version370,
+				IronicImage:            "quay.io/metal3-io/ironic:release-37.0",
 				KeepalivedImage:        "quay.io/metal3-io/keepalived:latest",
 				RamdiskDownloaderImage: "quay.io/metal3-io/ironic-ipa-downloader:latest",
-				MariaDBImage:           "quay.io/metal3-io/mariadb:latest",
 			},
 		},
 		{
@@ -108,7 +103,7 @@ func TestWithIronicOverrides(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.Scenario, func(t *testing.T) {
-			defaults, err := NewVersionInfo(tc.DefaultIronicImages, tc.DefaultIronicVersion, tc.DefaultDatabaseImage)
+			defaults, err := NewVersionInfo(tc.DefaultIronicImages, tc.DefaultIronicVersion)
 			require.NoError(t, err)
 			result, err := defaults.WithIronicOverrides(&tc.Ironic)
 			if tc.ExpectError != "" {
@@ -129,20 +124,20 @@ func TestPrometheusExporterVersionCheck(t *testing.T) {
 		expectedError string
 	}{
 		{
-			name:          "PrometheusExporter with version 32.0",
-			version:       metal3api.Version320,
+			name:          "PrometheusExporter with version 35.0",
+			version:       metal3api.Version350,
 			enabled:       true,
 			expectedError: "",
 		},
 		{
-			name:          "PrometheusExporter with version 33.0",
-			version:       metal3api.Version330,
+			name:          "PrometheusExporter with version 37.0",
+			version:       metal3api.Version370,
 			enabled:       true,
 			expectedError: "",
 		},
 		{
-			name:          "PrometheusExporter with version 34.0",
-			version:       metal3api.Version340,
+			name:          "PrometheusExporter with version 38.0",
+			version:       metal3api.Version380,
 			enabled:       true,
 			expectedError: "",
 		},
@@ -177,7 +172,7 @@ func TestPrometheusExporterVersionCheck(t *testing.T) {
 				Ironic: ironic,
 			}
 
-			err := checkVersion(resources, tc.version)
+			err := CheckVersion(resources, tc.version)
 			if tc.expectedError != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tc.expectedError)
@@ -188,65 +183,74 @@ func TestPrometheusExporterVersionCheck(t *testing.T) {
 	}
 }
 
-func TestBMCCAVersionCheck(t *testing.T) {
+func TestMultiRangeDHCPVersionCheck(t *testing.T) {
 	testCases := []struct {
 		name          string
 		version       metal3api.Version
+		dhcp          *metal3api.DHCP
 		expectedError string
 	}{
 		{
-			name:          "BMCCA with version 34.0",
-			version:       metal3api.Version340,
-			expectedError: "",
+			name:    "no DHCP at all",
+			version: metal3api.Version350,
 		},
 		{
-			name:          "BMCCA with version 33.0",
-			version:       metal3api.Version330,
-			expectedError: "",
+			name:    "DHCP without ExtraRanges on older version (allowed)",
+			version: metal3api.Version350,
+			dhcp: &metal3api.DHCP{
+				NetworkCIDR: "192.0.2.0/24",
+				RangeBegin:  "192.0.2.10",
+				RangeEnd:    "192.0.2.100",
+			},
 		},
 		{
-			name:          "BMCCA with version 32.0",
-			version:       metal3api.Version320,
-			expectedError: "",
+			name:    "ExtraRanges on latest version",
+			version: metal3api.VersionLatest,
+			dhcp: &metal3api.DHCP{
+				NetworkCIDR: "192.0.2.0/24",
+				RangeBegin:  "192.0.2.10",
+				RangeEnd:    "192.0.2.100",
+				ExtraRanges: []metal3api.DHCPRange{
+					{NetworkCIDR: "198.51.100.0/24", RangeBegin: "198.51.100.10", RangeEnd: "198.51.100.100"},
+				},
+			},
 		},
 		{
-			name:          "BMCCA with latest version",
-			version:       metal3api.VersionLatest,
-			expectedError: "",
+			name:    "ExtraRanges on 37.0 is allowed",
+			version: metal3api.Version370,
+			dhcp: &metal3api.DHCP{
+				NetworkCIDR: "192.0.2.0/24",
+				RangeBegin:  "192.0.2.10",
+				RangeEnd:    "192.0.2.100",
+				ExtraRanges: []metal3api.DHCPRange{
+					{NetworkCIDR: "198.51.100.0/24", RangeBegin: "198.51.100.10", RangeEnd: "198.51.100.100"},
+				},
+			},
+		},
+		{
+			name:    "ExtraRanges on 35.0 is rejected",
+			version: metal3api.Version350,
+			dhcp: &metal3api.DHCP{
+				NetworkCIDR: "192.0.2.0/24",
+				RangeBegin:  "192.0.2.10",
+				RangeEnd:    "192.0.2.100",
+				ExtraRanges: []metal3api.DHCPRange{
+					{NetworkCIDR: "198.51.100.0/24", RangeBegin: "198.51.100.10", RangeEnd: "198.51.100.100"},
+				},
+			},
+			expectedError: "networking.dhcp.extraRanges requires Ironic 37.0 or newer",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			bmcSecret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "bmc-ca",
-					Namespace: "test",
-				},
-				Data: map[string][]byte{
-					"ca.crt": []byte("test-ca-cert"),
-				},
-			}
-
 			ironic := &metal3api.Ironic{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-ironic",
-					Namespace: "test",
-				},
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "test"},
 				Spec: metal3api.IronicSpec{
-					TLS: metal3api.TLS{
-						BMCCAName: "bmc-ca",
-					},
+					Networking: metal3api.Networking{DHCP: tc.dhcp},
 				},
 			}
-
-			resources := Resources{
-				Ironic:      ironic,
-				BMCCASecret: bmcSecret,
-			}
-
-			err := checkVersion(resources, tc.version)
-
+			err := CheckVersion(Resources{Ironic: ironic}, tc.version)
 			if tc.expectedError != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tc.expectedError)

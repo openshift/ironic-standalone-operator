@@ -60,13 +60,13 @@ import (
 // every time the API is changed. The listing of all versions is here:
 // https://docs.openstack.org/ironic/latest/contributor/webapi-version-history.html
 const (
-	// NOTE(dtantsur): latest is now at least 1.101, so we can rely on this
-	// value to check that specifying Version: 34.0 actually installs 34.0.
-	apiVersionIn320 = "1.101"
-	apiVersionIn330 = "1.104"
-	apiVersionIn340 = "1.109"
+	// NOTE(dtantsur): latest is now at least 1.104, so we can rely on this
+	// value to check that specifying Version: 35.0 actually installs 35.0.
+	apiVersionIn350 = "1.111"
+	apiVersionIn370 = "1.112"
+	apiVersionIn380 = "1.113"
 	// Update this periodically to make sure we're installing the latest version by default.
-	knownAPIMinorVersion = 109
+	knownAPIMinorVersion = 113
 
 	numberOfNodes = 100
 
@@ -334,6 +334,9 @@ type TestAssumptions struct {
 
 	// Assume presence of ironic-prometheus-exporter
 	withPrometheusExporter bool
+
+	// The bind address used for the prometheus exporter (empty means default 127.0.0.1)
+	exporterBindAddress string
 }
 
 func verifyAPIVersion(ctx context.Context, cli *gophercloud.ServiceClient, assumptions TestAssumptions) {
@@ -466,14 +469,53 @@ func verifyConductorList(ctx context.Context, cli *gophercloud.ServiceClient, as
 	}
 }
 
-func verifyPrometheusExporter(ctx context.Context, currentIronicIPs []string) {
-	By("checking ironic-prometheus-exporter")
+func verifyPrometheusExporter(ctx context.Context, currentIronicIPs []string, bindAddress string) {
+	// Resolve empty to the default (0.0.0.0) so the classification below is unambiguous.
+	if bindAddress == "" {
+		bindAddress = "0.0.0.0"
+	}
+	parsedBind := net.ParseIP(bindAddress)
+	isLoopback := parsedBind != nil && parsedBind.IsLoopback()
+	// Wildcard means the exporter is reachable on all interfaces including the node IP.
+	isWildcard := bindAddress == "0.0.0.0" || bindAddress == "::"
 
-	httpClient := helpers.NewHTTPClient()
+	switch {
+	case isLoopback:
+		By("checking ironic-prometheus-exporter is not accessible via node IP (localhost binding)")
 
-	// NOTE(dtantsur): each Ironic replica has its own exporter, so verify them all independently
-	for _, ironicIP := range currentIronicIPs {
-		testURL := fmt.Sprintf("http://%s/metrics", net.JoinHostPort(ironicIP, "9608"))
+		// The prometheus exporter binds to localhost by default for security, so the
+		// metrics endpoint must NOT be reachable via the node's external IP.
+		// NOTE(dtantsur): each Ironic replica has its own exporter, verify them all independently.
+		for _, ironicIP := range currentIronicIPs {
+			addr := net.JoinHostPort(ironicIP, "9608")
+			dialer := &net.Dialer{}
+			conn, err := dialer.DialContext(ctx, "tcp", addr)
+			if conn != nil {
+				conn.Close()
+			}
+			Expect(err).To(HaveOccurred(),
+				"metrics endpoint should not be accessible via node IP %s (expected connection refused due to localhost binding)", ironicIP)
+		}
+
+	case isWildcard:
+		By(fmt.Sprintf("checking ironic-prometheus-exporter is accessible via node IP (bindAddress=%s)", bindAddress))
+
+		httpClient := helpers.NewHTTPClient()
+
+		// NOTE(dtantsur): each Ironic replica has its own exporter, verify them all independently.
+		for _, ironicIP := range currentIronicIPs {
+			testURL := fmt.Sprintf("http://%s/metrics", net.JoinHostPort(ironicIP, "9608"))
+			statusCode := helpers.GetStatusCode(ctx, &httpClient, testURL)
+			Expect(statusCode).To(Equal(200))
+		}
+
+	default:
+		// bindAddress is a specific non-loopback IP (e.g. a provisioning network IP).
+		// Probe that exact address rather than iterating node IPs, which may differ.
+		By("checking ironic-prometheus-exporter is accessible via specific bindAddress " + bindAddress)
+
+		httpClient := helpers.NewHTTPClient()
+		testURL := fmt.Sprintf("http://%s/metrics", net.JoinHostPort(bindAddress, "9608"))
 		statusCode := helpers.GetStatusCode(ctx, &httpClient, testURL)
 		Expect(statusCode).To(Equal(200))
 	}
@@ -557,7 +599,7 @@ func VerifyIronic(ironic *metal3api.Ironic, assumptions TestAssumptions) {
 	}
 
 	if assumptions.withPrometheusExporter {
-		verifyPrometheusExporter(withTimeout, currentIronicIPs)
+		verifyPrometheusExporter(withTimeout, currentIronicIPs, assumptions.exporterBindAddress)
 	}
 
 	clients := make([]*gophercloud.ServiceClient, 0, len(ironicURLs))
@@ -785,6 +827,9 @@ func testUpgradeHA(ironicVersionOld string, ironicVersionNew string, apiVersionO
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name.Name + "-api",
 			Namespace: namespace,
+			Labels: map[string]string{
+				metal3api.LabelEnvironmentName: metal3api.LabelEnvironmentValue,
+			},
 		},
 		Data: map[string][]byte{
 			corev1.BasicAuthUsernameKey: []byte("admin"),
@@ -819,7 +864,7 @@ func testUpgradeHA(ironicVersionOld string, ironicVersionNew string, apiVersionO
 	VerifyIronic(ironic, TestAssumptions{maxAPIVersion: apiVersionNew, withHA: true})
 }
 
-var _ = Describe("Ironic object tests", func() {
+var _ = Describe("Ironic resource", func() {
 	var namespace string
 
 	BeforeEach(func() {
@@ -877,7 +922,7 @@ var _ = Describe("Ironic object tests", func() {
 			DeleteAndWait(ironic)
 		})
 
-		WaitForIronicFailure(name, fmt.Sprintf("secret %s/banana not found", namespace), false)
+		WaitForIronicFailure(name, fmt.Sprintf("cannot load secret %s/banana", namespace), false)
 
 		By("creating the secret and recovering the Ironic")
 
@@ -923,7 +968,7 @@ var _ = Describe("Ironic object tests", func() {
 			DeleteAndWait(ironic)
 		})
 
-		WaitForIronicFailure(name, fmt.Sprintf("secret %s/banana not found", namespace), false)
+		WaitForIronicFailure(name, fmt.Sprintf("cannot load secret %s/banana", namespace), false)
 
 		By("creating the secret and recovering the Ironic")
 
@@ -938,19 +983,19 @@ var _ = Describe("Ironic object tests", func() {
 		VerifyIronic(ironic, TestAssumptions{withTLS: true})
 	})
 
-	It("creates Ironic 32.0 and upgrades to 33.0", Label("v320-to-330", "upgrade"), func() {
-		testUpgrade("32.0", "33.0", apiVersionIn320, apiVersionIn330, namespace)
+	It("creates Ironic 35.0 and upgrades to 37.0", Label("v350-to-370", "upgrade"), func() {
+		testUpgrade("35.0", "37.0", apiVersionIn350, apiVersionIn370, namespace)
 	})
 
-	It("creates Ironic 33.0 and upgrades to 34.0", Label("v330-to-340", "upgrade"), func() {
-		testUpgrade("33.0", "34.0", apiVersionIn330, apiVersionIn340, namespace)
+	It("creates Ironic 37.0 and upgrades to 38.0", Label("v370-to-380", "upgrade"), func() {
+		testUpgrade("37.0", "38.0", apiVersionIn370, apiVersionIn380, namespace)
 	})
 
-	It("creates Ironic 34.0 and upgrades to latest", Label("v340-to-latest", "upgrade"), func() {
-		testUpgrade("34.0", "latest", apiVersionIn340, "", namespace)
+	It("creates Ironic 38.0 and upgrades to latest", Label("v380-to-latest", "upgrade"), func() {
+		testUpgrade("38.0", "latest", apiVersionIn380, "", namespace)
 	})
 
-	It("creates Ironic 32.0 with database, then upgrades it to 33.0, then 34.0", Label("db-v320-to-330-to-340", "upgrade"), func() {
+	It("creates Ironic 35.0 with database, then upgrades it to 37.0, then 38.0", Label("db-v350-to-370-to-380", "upgrade"), func() {
 		helpers.SkipIfCustomImage()
 
 		name := types.NamespacedName{
@@ -960,7 +1005,7 @@ var _ = Describe("Ironic object tests", func() {
 
 		ironic := helpers.NewIronic(ctx, k8sClient, name, metal3api.IronicSpec{
 			Database: helpers.CreateDatabase(ctx, k8sClient, name),
-			Version:  "32.0",
+			Version:  "35.0",
 		})
 		DeferCleanup(func() {
 			CollectLogs(namespace)
@@ -968,27 +1013,27 @@ var _ = Describe("Ironic object tests", func() {
 		})
 
 		ironic = WaitForIronic(name)
-		VerifyIronic(ironic, TestAssumptions{maxAPIVersion: apiVersionIn320})
+		VerifyIronic(ironic, TestAssumptions{maxAPIVersion: apiVersionIn350})
 
-		By("upgrading to Ironic 33.0")
+		By("upgrading to Ironic 37.0")
 
 		patch := client.MergeFrom(ironic.DeepCopy())
-		ironic.Spec.Version = "33.0"
+		ironic.Spec.Version = "37.0"
 		err := k8sClient.Patch(ctx, ironic, patch)
 		Expect(err).NotTo(HaveOccurred())
 
-		ironic = WaitForUpgrade(name, "33.0")
-		VerifyIronic(ironic, TestAssumptions{maxAPIVersion: apiVersionIn330})
+		ironic = WaitForUpgrade(name, "37.0")
+		VerifyIronic(ironic, TestAssumptions{maxAPIVersion: apiVersionIn370})
 
-		By("upgrading to Ironic 34.0")
+		By("upgrading to Ironic 38.0")
 
 		patch = client.MergeFrom(ironic.DeepCopy())
-		ironic.Spec.Version = "34.0"
+		ironic.Spec.Version = "38.0"
 		err = k8sClient.Patch(ctx, ironic, patch)
 		Expect(err).NotTo(HaveOccurred())
 
-		ironic = WaitForUpgrade(name, "34.0")
-		VerifyIronic(ironic, TestAssumptions{maxAPIVersion: apiVersionIn340})
+		ironic = WaitForUpgrade(name, "38.0")
+		VerifyIronic(ironic, TestAssumptions{maxAPIVersion: apiVersionIn380})
 	})
 
 	It("refuses to downgrade Ironic with a database", Label("no-db-downgrade", "upgrade"), func() {
@@ -1001,7 +1046,7 @@ var _ = Describe("Ironic object tests", func() {
 
 		ironic := helpers.NewIronic(ctx, k8sClient, name, metal3api.IronicSpec{
 			Database: helpers.CreateDatabase(ctx, k8sClient, name),
-			Version:  "33.0",
+			Version:  "37.0",
 		})
 		DeferCleanup(func() {
 			CollectLogs(namespace)
@@ -1009,28 +1054,28 @@ var _ = Describe("Ironic object tests", func() {
 		})
 
 		ironic = WaitForIronic(name)
-		VerifyIronic(ironic, TestAssumptions{maxAPIVersion: apiVersionIn330})
+		VerifyIronic(ironic, TestAssumptions{maxAPIVersion: apiVersionIn370})
 
-		By("downgrading to Ironic 32.0")
+		By("downgrading to Ironic 35.0")
 
 		patch := client.MergeFrom(ironic.DeepCopy())
-		ironic.Spec.Version = "32.0"
+		ironic.Spec.Version = "35.0"
 		err := k8sClient.Patch(ctx, ironic, patch)
 		Expect(err).NotTo(HaveOccurred())
 
 		WaitForIronicFailure(name, "Ironic does not support downgrades", true)
 	})
 
-	It("creates Ironic 32.0 with HA and upgrades to 33.0", Label("ha-v320-to-330", "ha", "upgrade"), func() {
-		testUpgradeHA("32.0", "33.0", apiVersionIn320, apiVersionIn330, namespace)
+	It("creates Ironic 35.0 with HA and upgrades to 37.0", Label("ha-v350-to-370", "ha", "upgrade"), func() {
+		testUpgradeHA("35.0", "37.0", apiVersionIn350, apiVersionIn370, namespace)
 	})
 
-	It("creates Ironic 33.0 with HA and upgrades to 34.0", Label("ha-v330-to-340", "ha", "upgrade"), func() {
-		testUpgradeHA("33.0", "34.0", apiVersionIn330, apiVersionIn340, namespace)
+	It("creates Ironic 37.0 with HA and upgrades to 38.0", Label("ha-v370-to-380", "ha", "upgrade"), func() {
+		testUpgradeHA("37.0", "38.0", apiVersionIn370, apiVersionIn380, namespace)
 	})
 
-	It("creates Ironic 34.0 with HA and upgrades to latest", Label("ha-v340-to-latest", "ha", "upgrade"), func() {
-		testUpgradeHA("34.0", "latest", apiVersionIn340, "", namespace)
+	It("creates Ironic 38.0 with HA and upgrades to latest", Label("ha-v380-to-latest", "ha", "upgrade"), func() {
+		testUpgradeHA("38.0", "latest", apiVersionIn380, "", namespace)
 	})
 
 	It("creates Ironic with keepalived and DHCP", Label("keepalived-dnsmasq"), func() {
@@ -1182,8 +1227,9 @@ var _ = Describe("Ironic object tests", func() {
 
 		ironic := helpers.NewIronic(ctx, k8sClient, name, metal3api.IronicSpec{
 			PrometheusExporter: &metal3api.PrometheusExporter{
-				DisableServiceMonitor: os.Getenv("HAS_SERVICE_MONITOR") != "true",
+				DisableServiceMonitor: true,
 				Enabled:               true,
+				BindAddress:           "0.0.0.0",
 			},
 		})
 		DeferCleanup(func() {
@@ -1192,7 +1238,304 @@ var _ = Describe("Ironic object tests", func() {
 		})
 
 		ironic = WaitForIronic(name)
-		VerifyIronic(ironic, TestAssumptions{withPrometheusExporter: true})
+		VerifyIronic(ironic, TestAssumptions{withPrometheusExporter: true, exporterBindAddress: "0.0.0.0"})
+	})
+
+	It("creates Ironic with prometheus exporter bound to specific node IP", Label("prometheus-exporter-specific-ip"), func() {
+		name := types.NamespacedName{
+			Name:      "test-ironic",
+			Namespace: namespace,
+		}
+
+		// ironicIPs[0] is the Kubernetes node InternalIP, populated in BeforeSuite
+		// from the control-plane node list. In a single-node Minikube cluster this
+		// is identical to pod.Status.HostIP, so the exporter can bind to it and
+		// the test runner can reach it directly.
+		Expect(ironicIPs).NotTo(BeEmpty(), "ironicIPs must be populated before this test runs")
+		if len(ironicIPs) > 1 {
+			Skip("this test relies on a single-node cluster")
+		}
+		specificIP := ironicIPs[0]
+		parsedIP := net.ParseIP(specificIP)
+		Expect(parsedIP).NotTo(BeNil(), "ironicIPs[0] must be a valid IP address")
+		Expect(parsedIP.IsLoopback()).To(BeFalse(), "ironicIPs[0] must be a non-loopback address for this test to be meaningful")
+
+		ironic := helpers.NewIronic(ctx, k8sClient, name, metal3api.IronicSpec{
+			PrometheusExporter: &metal3api.PrometheusExporter{
+				DisableServiceMonitor: true,
+				Enabled:               true,
+				// Bind only to the node's specific external IP, not to all interfaces.
+				// verifyPrometheusExporter will probe this address directly.
+				BindAddress: specificIP,
+			},
+		})
+		DeferCleanup(func() {
+			CollectLogs(namespace)
+			DeleteAndWait(ironic)
+		})
+
+		ironic = WaitForIronic(name)
+		VerifyIronic(ironic, TestAssumptions{withPrometheusExporter: true, exporterBindAddress: specificIP})
+	})
+
+	It("creates Ironic with networking service", Label("networking"), func() {
+		helpers.SkipIfVersionBefore("35.0")
+
+		name := types.NamespacedName{
+			Name:      "test-ironic",
+			Namespace: namespace,
+		}
+
+		ironic := helpers.NewIronic(ctx, k8sClient, name, metal3api.IronicSpec{
+			NetworkingService: &metal3api.NetworkingService{
+				Enabled: true,
+			},
+		})
+		DeferCleanup(func() {
+			CollectLogs(namespace)
+			DeleteAndWait(ironic)
+		})
+
+		ironic = WaitForIronic(name)
+		VerifyIronic(ironic, TestAssumptions{})
+
+		helpers.VerifyNetworkingDeploymentExists(ctx, clientset, namespace, name.Name)
+		helpers.VerifyNetworkingServiceExists(ctx, clientset, namespace, name.Name)
+		helpers.VerifySwitchConfigSecretExists(ctx, clientset, namespace, name.Name)
+		helpers.VerifySwitchCredentialsSecretExists(ctx, clientset, namespace, name.Name)
+		helpers.VerifyNetworkingEnvVarsOnIronic(ctx, clientset, namespace, name.Name)
+	})
+
+	It("starts networking service with user-provided switch secrets", Label("networking-user-secret", "networking"), func() {
+		helpers.SkipIfVersionBefore("35.0")
+
+		name := types.NamespacedName{
+			Name:      "test-ironic",
+			Namespace: namespace,
+		}
+
+		By("creating user-provided switch config secret with environment label")
+		userConfigSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name.Name + "-switch-config",
+				Namespace: namespace,
+				Labels: map[string]string{
+					metal3api.LabelEnvironmentName: metal3api.LabelEnvironmentValue,
+				},
+			},
+			Data: map[string][]byte{
+				"switch-configs.conf": []byte("[switch.user-provided]\nip=10.0.0.99\n"),
+			},
+		}
+		err := k8sClient.Create(ctx, userConfigSecret)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			_ = k8sClient.Delete(ctx, userConfigSecret)
+		})
+
+		By("creating user-provided switch credentials secret with environment label")
+		userCredsSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name.Name + "-switch-credentials",
+				Namespace: namespace,
+				Labels: map[string]string{
+					metal3api.LabelEnvironmentName: metal3api.LabelEnvironmentValue,
+				},
+			},
+			Data: map[string][]byte{
+				"00-11-22-33-44-55.key": []byte("user-provided-ssh-key"),
+			},
+		}
+		err = k8sClient.Create(ctx, userCredsSecret)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			_ = k8sClient.Delete(ctx, userCredsSecret)
+		})
+
+		ironic := helpers.NewIronic(ctx, k8sClient, name, metal3api.IronicSpec{
+			NetworkingService: &metal3api.NetworkingService{
+				Enabled: true,
+			},
+		})
+		DeferCleanup(func() {
+			CollectLogs(namespace)
+			DeleteAndWait(ironic)
+		})
+
+		ironic = WaitForIronic(name)
+
+		By("verifying the operator did not overwrite user-provided config secret")
+		configSecret, err := clientset.CoreV1().Secrets(namespace).Get(ctx, name.Name+"-switch-config", metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(configSecret.Data["switch-configs.conf"])).To(ContainSubstring("user-provided"))
+		Expect(configSecret.Labels).NotTo(HaveKey("ironic.metal3.io/managed"))
+
+		By("verifying the operator did not overwrite user-provided credentials secret")
+		credsSecret, err := clientset.CoreV1().Secrets(namespace).Get(ctx, name.Name+"-switch-credentials", metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(credsSecret.Data["00-11-22-33-44-55.key"])).To(Equal("user-provided-ssh-key"))
+		Expect(credsSecret.Labels).NotTo(HaveKey("ironic.metal3.io/managed"))
+
+		By("disabling networking and verifying user-provided secrets survive")
+		patchObj := client.MergeFrom(ironic.DeepCopy())
+		ironic.Spec.NetworkingService.Enabled = false
+		err = k8sClient.Patch(ctx, ironic, patchObj)
+		Expect(err).NotTo(HaveOccurred())
+
+		ironic = WaitForIronic(name)
+		helpers.VerifyNetworkingResourcesGone(ctx, clientset, namespace, name.Name)
+
+		// User-provided secrets should still exist
+		configSecret, err = clientset.CoreV1().Secrets(namespace).Get(ctx, name.Name+"-switch-config", metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred(), "user-provided switch config secret should not be deleted")
+		Expect(string(configSecret.Data["switch-configs.conf"])).To(ContainSubstring("user-provided"))
+
+		credsSecret, err = clientset.CoreV1().Secrets(namespace).Get(ctx, name.Name+"-switch-credentials", metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred(), "user-provided switch credentials secret should not be deleted")
+		Expect(string(credsSecret.Data["00-11-22-33-44-55.key"])).To(Equal("user-provided-ssh-key"))
+	})
+
+	It("with networking service reports missing label on user-provided secret", Label("networking-missing-label", "networking"), func() {
+		helpers.SkipIfVersionBefore("35.0")
+
+		name := types.NamespacedName{
+			Name:      "test-ironic",
+			Namespace: namespace,
+		}
+
+		By("creating a switch config secret without the environment label")
+		unlabeledSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name.Name + "-switch-config",
+				Namespace: namespace,
+			},
+			Data: map[string][]byte{
+				"switch-configs.conf": []byte("[switch.test]\nip=10.0.0.1\n"),
+			},
+		}
+		err := k8sClient.Create(ctx, unlabeledSecret)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			_ = k8sClient.Delete(ctx, unlabeledSecret)
+		})
+
+		ironic := helpers.NewIronic(ctx, k8sClient, name, metal3api.IronicSpec{
+			NetworkingService: &metal3api.NetworkingService{
+				Enabled: true,
+			},
+		})
+		DeferCleanup(func() {
+			CollectLogs(namespace)
+			DeleteAndWait(ironic)
+		})
+
+		By("verifying Ironic reports the missing label error")
+		WaitForIronicFailure(name, "does not have the required label", false)
+
+		By("adding the environment label to the secret")
+		err = k8sClient.Get(ctx, types.NamespacedName{Name: unlabeledSecret.Name, Namespace: namespace}, unlabeledSecret)
+		Expect(err).NotTo(HaveOccurred())
+		if unlabeledSecret.Labels == nil {
+			unlabeledSecret.Labels = make(map[string]string)
+		}
+		unlabeledSecret.Labels[metal3api.LabelEnvironmentName] = metal3api.LabelEnvironmentValue
+		err = k8sClient.Update(ctx, unlabeledSecret)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("verifying Ironic recovers")
+		ironic = WaitForIronic(name)
+		VerifyIronic(ironic, TestAssumptions{})
+	})
+
+	It("allows enabling and disabling networking service", Label("networking-lifecycle", "networking"), func() {
+		helpers.SkipIfVersionBefore("35.0")
+
+		name := types.NamespacedName{
+			Name:      "test-ironic",
+			Namespace: namespace,
+		}
+
+		By("creating Ironic without networking")
+		ironic := helpers.NewIronic(ctx, k8sClient, name, metal3api.IronicSpec{})
+		DeferCleanup(func() {
+			CollectLogs(namespace)
+			DeleteAndWait(ironic)
+		})
+
+		ironic = WaitForIronic(name)
+		helpers.VerifyNetworkingDeploymentNotExists(ctx, clientset, namespace, name.Name)
+		helpers.VerifyNetworkingServiceNotExists(ctx, clientset, namespace, name.Name)
+
+		By("enabling networking")
+		err := k8sClient.Get(ctx, name, ironic)
+		Expect(err).NotTo(HaveOccurred())
+		patch := client.MergeFrom(ironic.DeepCopy())
+		ironic.Spec.NetworkingService = &metal3api.NetworkingService{
+			Enabled: true,
+		}
+		err = k8sClient.Patch(ctx, ironic, patch)
+		Expect(err).NotTo(HaveOccurred())
+
+		ironic = WaitForIronic(name)
+		helpers.VerifyNetworkingDeploymentExists(ctx, clientset, namespace, name.Name)
+		helpers.VerifyNetworkingServiceExists(ctx, clientset, namespace, name.Name)
+		helpers.VerifySwitchConfigSecretExists(ctx, clientset, namespace, name.Name)
+		helpers.VerifySwitchCredentialsSecretExists(ctx, clientset, namespace, name.Name)
+
+		By("disabling networking")
+		err = k8sClient.Get(ctx, name, ironic)
+		Expect(err).NotTo(HaveOccurred())
+		patch = client.MergeFrom(ironic.DeepCopy())
+		ironic.Spec.NetworkingService.Enabled = false
+		err = k8sClient.Patch(ctx, ironic, patch)
+		Expect(err).NotTo(HaveOccurred())
+
+		ironic = WaitForIronic(name)
+		helpers.VerifyNetworkingResourcesGone(ctx, clientset, namespace, name.Name)
+		helpers.VerifySwitchSecretsGone(ctx, clientset, namespace, name.Name)
+	})
+
+	It("restart networking service on switch config change", Label("networking-restart", "networking"), func() {
+		helpers.SkipIfVersionBefore("35.0")
+
+		name := types.NamespacedName{
+			Name:      "test-ironic",
+			Namespace: namespace,
+		}
+
+		ironic := helpers.NewIronic(ctx, k8sClient, name, metal3api.IronicSpec{
+			NetworkingService: &metal3api.NetworkingService{
+				Enabled: true,
+			},
+		})
+		DeferCleanup(func() {
+			CollectLogs(namespace)
+			DeleteAndWait(ironic)
+		})
+
+		ironic = WaitForIronic(name)
+
+		By("recording initial switch config annotation")
+		initialAnnotation := helpers.GetNetworkingPodAnnotation(ctx, clientset, namespace, name.Name, "ironic.metal3.io/switch-config-version")
+		Expect(initialAnnotation).NotTo(BeEmpty())
+
+		By("updating switch config secret")
+		secretName := name.Name + "-switch-config"
+		secret, err := clientset.CoreV1().Secrets(namespace).Get(ctx, secretName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		secret.Data["switch-configs.conf"] = []byte("[switch.new]\nip=10.0.0.1\n")
+		_, err = clientset.CoreV1().Secrets(namespace).Update(ctx, secret, metav1.UpdateOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("waiting for annotation to change")
+		Eventually(func() string {
+			return helpers.GetNetworkingPodAnnotation(ctx, clientset, namespace, name.Name, "ironic.metal3.io/switch-config-version")
+		}).WithTimeout(3 * time.Minute).WithPolling(10 * time.Second).ShouldNot(Equal(initialAnnotation))
+
+		By("verifying Ironic is still healthy")
+		ironic = WaitForIronic(name)
+		VerifyIronic(ironic, TestAssumptions{})
 	})
 })
 

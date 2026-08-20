@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	corev1 "k8s.io/api/core/v1"
 
 	metal3api "github.com/metal3-io/ironic-standalone-operator/api/v1alpha1"
 )
@@ -84,6 +85,98 @@ func TestValidateIronic(t *testing.T) {
 				},
 			},
 			ExpectedError: "banana is not a valid IP address",
+		},
+		{
+			Scenario: "with ingress",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					Ingress: &metal3api.Ingress{
+						Host: "ironic.example.com",
+					},
+				},
+			},
+		},
+		{
+			Scenario: "ingress and externalIP configured simultaneously",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					ExternalIP: "192.168.0.2",
+					Ingress: &metal3api.Ingress{
+						Host: "ironic.example.com",
+					},
+				},
+			},
+			ExpectedError: "networking.externalIP cannot be set together with networking.ingress or networking.externalCallbackURL or networking.imageServerExternalURL",
+		},
+		{
+			Scenario: "externalCallbackURL and externalIP configured simultaneously",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					ExternalIP:          "192.168.0.2",
+					ExternalCallbackURL: "https://ironic.example.com",
+				},
+			},
+			ExpectedError: "networking.externalIP cannot be set together with networking.ingress or networking.externalCallbackURL or networking.imageServerExternalURL",
+		},
+		{
+			Scenario: "imageServerExternalURL and externalIP configured simultaneously",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					ExternalIP:             "192.168.0.2",
+					ImageServerExternalURL: "https://image.example.com",
+				},
+			},
+			ExpectedError: "networking.externalIP cannot be set together with networking.ingress or networking.externalCallbackURL or networking.imageServerExternalURL",
+		},
+		{
+			Scenario: "DHCP configured and host networking disabled",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					DisableHostNetwork: true,
+					DHCP:               &metal3api.DHCP{DNSAddress: "1.1.1.1"},
+				},
+			},
+			ExpectedError: "networking.disableHostNetwork cannot be set to true together with networking.bindInterface or networking.dhcp or networking.interface or networking.ipAddress or networking.macAddresses or networking.keepalived",
+		},
+		{
+			Scenario: "ingress is configured and externalCallbackURL is configured",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					Ingress: &metal3api.Ingress{
+						Host: "ironic.example.com",
+					},
+					ExternalCallbackURL: "http://ironic.example.com",
+				},
+			},
+		},
+		{
+			Scenario: "ingress is configured and imageServerExternalURL is configured",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					Ingress: &metal3api.Ingress{
+						Host: "ironic.example.com",
+					},
+					ImageServerExternalURL: "http://image.example.com",
+				},
+			},
+		},
+		{
+			Scenario: "ingress is not configured and imageServerExternalURL is configured",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					ImageServerExternalURL: "http://image.example.com",
+				},
+			},
+			ExpectedError: "when networking.ingress is not set, networking.externalCallbackURL and networking.imageServerExternalURL must be set together",
+		},
+		{
+			Scenario: "ingress is not configured and externalCallbackURL is configured",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					ExternalCallbackURL: "http://ironic.example.com",
+				},
+			},
+			ExpectedError: "when networking.ingress is not set, networking.externalCallbackURL and networking.imageServerExternalURL must be set together",
 		},
 		{
 			Scenario: "HA needs database",
@@ -199,9 +292,159 @@ func TestValidateIronic(t *testing.T) {
 			ExpectedError: "ipAddress makes no sense with highly available architecture",
 		},
 		{
+			Scenario: "valid Keepalived enabled without additional VIPs",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					Interface: "eth0",
+					IPAddress: "192.0.2.2",
+					Keepalived: &metal3api.KeepalivedConfig{
+						Enabled: true,
+					},
+				},
+			},
+		},
+		{
+			Scenario: "valid Keepalived enabled with additional VIPs",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					Interface: "eth0",
+					IPAddress: "192.0.2.2",
+					Keepalived: &metal3api.KeepalivedConfig{
+						Enabled: true,
+						AdditionalVIPs: []metal3api.KeepalivedIP{
+							{IPAddress: "192.168.1.50", Interface: "eth1"},
+						},
+					},
+				},
+			},
+		},
+		{
+			Scenario: "Keepalived and ipAddressManager are mutually exclusive",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					Interface:        "eth0",
+					IPAddress:        "192.0.2.2",
+					IPAddressManager: metal3api.IPAddressManagerKeepalived,
+					Keepalived: &metal3api.KeepalivedConfig{
+						Enabled: true,
+					},
+				},
+			},
+			ExpectedError: "keepalived and ipAddressManager cannot be used together",
+		},
+		{
+			Scenario: "Keepalived incompatible with HA",
+			Ironic: metal3api.IronicSpec{
+				Database: &metal3api.Database{
+					CredentialsName: "test",
+					Host:            "example.com",
+					Name:            "ironic",
+				},
+				HighAvailability: true,
+				Networking: metal3api.Networking{
+					Interface: "eth0",
+					IPAddress: "192.0.2.2",
+					Keepalived: &metal3api.KeepalivedConfig{
+						Enabled: true,
+					},
+				},
+			},
+			ExpectedError: "ipAddress makes no sense with highly available architecture",
+		},
+		{
+			Scenario: "Keepalived incompatible with HA - no ipAddress",
+			Ironic: metal3api.IronicSpec{
+				Database: &metal3api.Database{
+					CredentialsName: "test",
+					Host:            "example.com",
+					Name:            "ironic",
+				},
+				HighAvailability: true,
+				Networking: metal3api.Networking{
+					Keepalived: &metal3api.KeepalivedConfig{
+						Enabled: true,
+					},
+				},
+			},
+			ExpectedError: "keepalived is not compatible with the highly available architecture",
+		},
+		{
+			Scenario: "Keepalived requires ipAddress",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					Interface: "eth0",
+					Keepalived: &metal3api.KeepalivedConfig{
+						Enabled: true,
+					},
+				},
+			},
+			ExpectedError: "keepalived requires specifying both ipAddress and interface",
+		},
+		{
+			Scenario: "Keepalived requires interface",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					IPAddress: "192.0.2.2",
+					Keepalived: &metal3api.KeepalivedConfig{
+						Enabled: true,
+					},
+				},
+			},
+			ExpectedError: "keepalived requires specifying both ipAddress and interface",
+		},
+		{
+			Scenario: "Keepalived additionalVIPs entry missing ipAddress",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					Interface: "eth0",
+					IPAddress: "192.0.2.2",
+					Keepalived: &metal3api.KeepalivedConfig{
+						Enabled: true,
+						AdditionalVIPs: []metal3api.KeepalivedIP{
+							{Interface: "eth1"},
+						},
+					},
+				},
+			},
+			ExpectedError: "networking.keepalived.additionalVIPs[0]: ipAddress is required",
+		},
+		{
+			Scenario: "Keepalived additionalVIPs entry with invalid IP",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					Interface: "eth0",
+					IPAddress: "192.0.2.2",
+					Keepalived: &metal3api.KeepalivedConfig{
+						Enabled: true,
+						AdditionalVIPs: []metal3api.KeepalivedIP{
+							{IPAddress: "not-an-ip", Interface: "eth1"},
+						},
+					},
+				},
+			},
+			ExpectedError: "networking.keepalived.additionalVIPs[0]: not-an-ip is not a valid IP address",
+		},
+		{
+			Scenario: "Keepalived additionalVIPs entry missing interface",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					Interface: "eth0",
+					IPAddress: "192.0.2.2",
+					Keepalived: &metal3api.KeepalivedConfig{
+						Enabled: true,
+						AdditionalVIPs: []metal3api.KeepalivedIP{
+							{IPAddress: "192.168.1.50"},
+						},
+					},
+				},
+			},
+			ExpectedError: "networking.keepalived.additionalVIPs[0]: interface is required",
+		},
+
+		{
 			Scenario: "with version",
 			Ironic: metal3api.IronicSpec{
-				Version: "32.0",
+				Version: "35.0",
 			},
 		},
 		{
@@ -216,7 +459,7 @@ func TestValidateIronic(t *testing.T) {
 			Ironic: metal3api.IronicSpec{
 				Version: "42.42",
 			},
-			ExpectedError: "version 42.42 is not supported, supported versions are 32.0, 33.0, 34.0, latest",
+			ExpectedError: "version 42.42 is not supported, supported versions are 35.0, 37.0, 38.0, latest",
 		},
 		{
 			Scenario: "change existing database config",
@@ -329,6 +572,282 @@ func TestValidateIronic(t *testing.T) {
 			ExpectedError: "not-an-ip is not a valid IP address",
 		},
 		{
+			Scenario: "extra ranges: main range plus relayed subnets (provIP not in extras)",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					IPAddress: "10.0.0.1",
+					Interface: "eth0",
+					DHCP: &metal3api.DHCP{
+						NetworkCIDR: "10.0.0.0/24",
+						RangeBegin:  "10.0.0.10",
+						RangeEnd:    "10.0.0.100",
+						ExtraRanges: []metal3api.DHCPRange{
+							{
+								NetworkCIDR:    "192.168.1.0/24",
+								RangeBegin:     "192.168.1.10",
+								RangeEnd:       "192.168.1.100",
+								GatewayAddress: "192.168.1.1",
+							},
+							{
+								NetworkCIDR:    "192.168.2.0/24",
+								RangeBegin:     "192.168.2.10",
+								RangeEnd:       "192.168.2.100",
+								GatewayAddress: "192.168.2.1",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			Scenario: "extra ranges: IPv6",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					IPAddress: "fd69:158d:692a::1",
+					Interface: "eth0",
+					DHCP: &metal3api.DHCP{
+						NetworkCIDR: "fd69:158d:692a::/64",
+						RangeBegin:  "fd69:158d:692a::3000",
+						RangeEnd:    "fd69:158d:692a::3fff",
+						ExtraRanges: []metal3api.DHCPRange{
+							{
+								NetworkCIDR: "fd69:158d:692a:1::/64",
+								RangeBegin:  "fd69:158d:692a:1::3000",
+								RangeEnd:    "fd69:158d:692a:1::3fff",
+							},
+							{
+								NetworkCIDR: "fd69:158d:692a:2::/64",
+								RangeBegin:  "fd69:158d:692a:2::3000",
+								RangeEnd:    "fd69:158d:692a:2::3fff",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			Scenario: "extra ranges: without a main range is allowed (relay-only)",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					IPAddress: "10.0.0.1",
+					Interface: "eth0",
+					DHCP: &metal3api.DHCP{
+						ExtraRanges: []metal3api.DHCPRange{
+							{NetworkCIDR: "192.168.1.0/24", RangeBegin: "192.168.1.10", RangeEnd: "192.168.1.100"},
+						},
+					},
+				},
+			},
+		},
+		{
+			Scenario: "extra ranges: partial main range (networkCIDR only) is rejected",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					IPAddress: "10.0.0.1",
+					Interface: "eth0",
+					DHCP: &metal3api.DHCP{
+						NetworkCIDR: "10.0.0.0/24",
+						ExtraRanges: []metal3api.DHCPRange{
+							{NetworkCIDR: "192.168.1.0/24", RangeBegin: "192.168.1.10", RangeEnd: "192.168.1.100"},
+						},
+					},
+				},
+			},
+			ExpectedError: "networkCIDR, rangeBegin and rangeEnd must be set together",
+		},
+		{
+			Scenario: "extra ranges: rangeBegin outside CIDR",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					IPAddress: "10.0.0.1",
+					Interface: "eth0",
+					DHCP: &metal3api.DHCP{
+						NetworkCIDR: "10.0.0.0/24",
+						RangeBegin:  "10.0.0.10",
+						RangeEnd:    "10.0.0.100",
+						ExtraRanges: []metal3api.DHCPRange{
+							{NetworkCIDR: "172.16.0.0/24", RangeBegin: "192.168.1.10", RangeEnd: "172.16.0.100"},
+						},
+					},
+				},
+			},
+			ExpectedError: "extraRanges[0].rangeBegin",
+		},
+		{
+			Scenario: "extra ranges: per-range gatewayAddress outside its CIDR is rejected",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					IPAddress: "10.0.0.1",
+					Interface: "eth0",
+					DHCP: &metal3api.DHCP{
+						NetworkCIDR: "10.0.0.0/24",
+						RangeBegin:  "10.0.0.10",
+						RangeEnd:    "10.0.0.100",
+						ExtraRanges: []metal3api.DHCPRange{
+							{NetworkCIDR: "192.168.141.0/27", RangeBegin: "192.168.141.2", RangeEnd: "192.168.141.29", GatewayAddress: "10.0.0.1"},
+						},
+					},
+				},
+			},
+			ExpectedError: "extraRanges[0].gatewayAddress",
+		},
+		{
+			Scenario: "extra ranges: provIP outside the main CIDR is still rejected",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					IPAddress: "192.168.140.100",
+					Interface: "eth0",
+					DHCP: &metal3api.DHCP{
+						NetworkCIDR: "192.168.14.0/24",
+						RangeBegin:  "192.168.14.101",
+						RangeEnd:    "192.168.14.250",
+						ExtraRanges: []metal3api.DHCPRange{
+							{NetworkCIDR: "192.168.141.0/27", RangeBegin: "192.168.141.2", RangeEnd: "192.168.141.29"},
+						},
+					},
+				},
+			},
+			ExpectedError: "networking.dhcp.networkCIDR must contain networking.ipAddress",
+		},
+		{
+			Scenario: "DHCP with no ranges at all",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					Interface: "eth0",
+					DHCP:      &metal3api.DHCP{},
+				},
+			},
+			ExpectedError: "networkCIDR, rangeBegin and rangeEnd are required unless extraRanges is set",
+		},
+		{
+			Scenario: "reversed main range is rejected",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					IPAddress: "192.168.1.1",
+					Interface: "eth0",
+					DHCP: &metal3api.DHCP{
+						NetworkCIDR: "192.168.1.0/24",
+						RangeBegin:  "192.168.1.200",
+						RangeEnd:    "192.168.1.10",
+					},
+				},
+			},
+			ExpectedError: "rangeBegin must not be after rangeEnd",
+		},
+		{
+			Scenario: "extra ranges: reversed range is rejected",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					IPAddress: "10.0.0.1",
+					Interface: "eth0",
+					DHCP: &metal3api.DHCP{
+						NetworkCIDR: "10.0.0.0/24",
+						RangeBegin:  "10.0.0.10",
+						RangeEnd:    "10.0.0.100",
+						ExtraRanges: []metal3api.DHCPRange{
+							{NetworkCIDR: "192.168.1.0/24", RangeBegin: "192.168.1.200", RangeEnd: "192.168.1.10"},
+						},
+					},
+				},
+			},
+			ExpectedError: "extraRanges[0]: rangeBegin must not be after rangeEnd",
+		},
+		{
+			Scenario: "extra ranges: /0 networkCIDR is rejected",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					IPAddress: "10.0.0.1",
+					Interface: "eth0",
+					DHCP: &metal3api.DHCP{
+						NetworkCIDR: "10.0.0.0/24",
+						RangeBegin:  "10.0.0.10",
+						RangeEnd:    "10.0.0.100",
+						ExtraRanges: []metal3api.DHCPRange{
+							{NetworkCIDR: "0.0.0.0/0", RangeBegin: "192.168.1.10", RangeEnd: "192.168.1.200"},
+						},
+					},
+				},
+			},
+			ExpectedError: "non-zero prefix length",
+		},
+		{
+			Scenario: "extra ranges: pool overlapping the main range is rejected",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					IPAddress: "10.0.0.1",
+					Interface: "eth0",
+					DHCP: &metal3api.DHCP{
+						NetworkCIDR: "10.0.0.0/16",
+						RangeBegin:  "10.0.1.10",
+						RangeEnd:    "10.0.1.100",
+						ExtraRanges: []metal3api.DHCPRange{
+							{NetworkCIDR: "10.0.0.0/16", RangeBegin: "10.0.1.50", RangeEnd: "10.0.1.200"},
+						},
+					},
+				},
+			},
+			ExpectedError: "overlap",
+		},
+		{
+			Scenario: "extra ranges: duplicate pools are rejected",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					IPAddress: "10.0.0.1",
+					Interface: "eth0",
+					DHCP: &metal3api.DHCP{
+						NetworkCIDR: "10.0.0.0/24",
+						RangeBegin:  "10.0.0.10",
+						RangeEnd:    "10.0.0.100",
+						ExtraRanges: []metal3api.DHCPRange{
+							{NetworkCIDR: "192.168.1.0/24", RangeBegin: "192.168.1.10", RangeEnd: "192.168.1.200"},
+							{NetworkCIDR: "192.168.1.0/24", RangeBegin: "192.168.1.10", RangeEnd: "192.168.1.200"},
+						},
+					},
+				},
+			},
+			ExpectedError: "overlap",
+		},
+		{
+			Scenario: "extra ranges: adjacent pools in one subnet are valid",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					IPAddress: "10.0.0.1",
+					Interface: "eth0",
+					DHCP: &metal3api.DHCP{
+						NetworkCIDR: "10.0.0.0/24",
+						RangeBegin:  "10.0.0.10",
+						RangeEnd:    "10.0.0.100",
+						ExtraRanges: []metal3api.DHCPRange{
+							{NetworkCIDR: "10.0.0.0/24", RangeBegin: "10.0.0.101", RangeEnd: "10.0.0.200"},
+						},
+					},
+				},
+			},
+		},
+		{
+			Scenario: "extra ranges: IPv6 per-range gateway is rejected",
+			Ironic: metal3api.IronicSpec{
+				Networking: metal3api.Networking{
+					IPAddress: "fd69:158d:692a::1",
+					Interface: "eth0",
+					DHCP: &metal3api.DHCP{
+						NetworkCIDR: "fd69:158d:692a::/64",
+						RangeBegin:  "fd69:158d:692a::3000",
+						RangeEnd:    "fd69:158d:692a::3fff",
+						ExtraRanges: []metal3api.DHCPRange{
+							{
+								NetworkCIDR:    "fd69:158d:692a:1::/64",
+								RangeBegin:     "fd69:158d:692a:1::3000",
+								RangeEnd:       "fd69:158d:692a:1::3fff",
+								GatewayAddress: "fd69:158d:692a:1::1",
+							},
+						},
+					},
+				},
+			},
+			ExpectedError: "IPv6 per-range gateway is not supported",
+		},
+		{
 			Scenario: "HA incompatible with ServiceMonitor",
 			Ironic: metal3api.IronicSpec{
 				Database: &metal3api.Database{
@@ -338,10 +857,114 @@ func TestValidateIronic(t *testing.T) {
 				},
 				HighAvailability: true,
 				PrometheusExporter: &metal3api.PrometheusExporter{
-					Enabled: true,
+					Enabled:     true,
+					BindAddress: "0.0.0.0",
 				},
 			},
 			ExpectedError: "ServiceMonitor support is currently incompatible with the highly available architecture",
+		},
+		{
+			// With the default bindAddress of "0.0.0.0", ServiceMonitor must be valid.
+			Scenario: "ServiceMonitor with default bindAddress is valid",
+			Ironic: metal3api.IronicSpec{
+				PrometheusExporter: &metal3api.PrometheusExporter{
+					Enabled: true,
+				},
+			},
+		},
+		{
+			Scenario: "ServiceMonitor incompatible with explicit loopback bindAddress",
+			Ironic: metal3api.IronicSpec{
+				PrometheusExporter: &metal3api.PrometheusExporter{
+					Enabled:     true,
+					BindAddress: "127.0.0.1",
+				},
+			},
+			ExpectedError: "ServiceMonitor is not compatible with a loopback bindAddress",
+		},
+		{
+			Scenario: "ServiceMonitor incompatible with IPv6 loopback bindAddress",
+			Ironic: metal3api.IronicSpec{
+				PrometheusExporter: &metal3api.PrometheusExporter{
+					Enabled:     true,
+					BindAddress: "::1",
+				},
+			},
+			ExpectedError: "ServiceMonitor is not compatible with a loopback bindAddress",
+		},
+		{
+			Scenario: "ServiceMonitor with bindAddress 0.0.0.0 is valid",
+			Ironic: metal3api.IronicSpec{
+				PrometheusExporter: &metal3api.PrometheusExporter{
+					Enabled:     true,
+					BindAddress: "0.0.0.0",
+				},
+			},
+		},
+		{
+			Scenario: "ServiceMonitor with specific IP bindAddress is valid",
+			Ironic: metal3api.IronicSpec{
+				PrometheusExporter: &metal3api.PrometheusExporter{
+					Enabled:     true,
+					BindAddress: "192.168.1.10",
+				},
+			},
+		},
+		{
+			// disableServiceMonitor must allow a loopback bindAddress that would otherwise
+			// be rejected when ServiceMonitor creation is enabled.
+			Scenario: "disableServiceMonitor bypasses loopback bindAddress requirement",
+			Ironic: metal3api.IronicSpec{
+				PrometheusExporter: &metal3api.PrometheusExporter{
+					Enabled:               true,
+					DisableServiceMonitor: true,
+					BindAddress:           "127.0.0.1",
+				},
+			},
+		},
+		{
+			// Disabled exporter with default (loopback) bindAddress must pass validation
+			// even though DisableServiceMonitor defaults to false. The loopback restriction
+			// only applies when the exporter is actually enabled.
+			Scenario: "disabled exporter with default bindAddress passes validation",
+			Ironic: metal3api.IronicSpec{
+				PrometheusExporter: &metal3api.PrometheusExporter{
+					Enabled: false,
+				},
+			},
+		},
+		{
+			// Disabled exporter with explicit loopback bindAddress must also pass.
+			Scenario: "disabled exporter with loopback bindAddress passes validation",
+			Ironic: metal3api.IronicSpec{
+				PrometheusExporter: &metal3api.PrometheusExporter{
+					Enabled:     false,
+					BindAddress: "127.0.0.1",
+				},
+			},
+		},
+		{
+			// Disabled exporter with ServiceMonitor still enabled (disableServiceMonitor: false)
+			// and a loopback address must not be rejected – the combination is only invalid
+			// when the exporter is running and would actually be scraped.
+			Scenario: "disabled exporter with ServiceMonitor enabled and loopback bindAddress passes validation",
+			Ironic: metal3api.IronicSpec{
+				PrometheusExporter: &metal3api.PrometheusExporter{
+					Enabled:               false,
+					DisableServiceMonitor: false,
+					BindAddress:           "127.0.0.1",
+				},
+			},
+		},
+		{
+			Scenario: "invalid bindAddress",
+			Ironic: metal3api.IronicSpec{
+				PrometheusExporter: &metal3api.PrometheusExporter{
+					Enabled:     true,
+					BindAddress: "not-an-ip",
+				},
+			},
+			ExpectedError: "bindAddress \"not-an-ip\" is not a valid IP address",
 		},
 		{
 			Scenario: "valid agent images single architecture x86_64",
@@ -678,6 +1301,123 @@ func TestValidateIronic(t *testing.T) {
 			},
 			ExpectedError: "overrides.agentImages[0].initramfs: unsupported protocol \"ssh\"",
 		},
+		{
+			Scenario: "networking service with access mode provider network",
+			Ironic: metal3api.IronicSpec{
+				NetworkingService: &metal3api.NetworkingService{
+					Enabled: true,
+					ProviderNetworks: []metal3api.ProviderNetworkConfig{
+						{Type: "idle", Mode: metal3api.SwitchportModeAccess, NativeVLAN: 100},
+					},
+				},
+			},
+		},
+		{
+			Scenario: "networking service with trunk mode provider network",
+			Ironic: metal3api.IronicSpec{
+				NetworkingService: &metal3api.NetworkingService{
+					Enabled: true,
+					ProviderNetworks: []metal3api.ProviderNetworkConfig{
+						{Type: "inspection", Mode: metal3api.SwitchportModeTrunk, NativeVLAN: 100, AllowedVLANs: []string{"100", "200", "300"}},
+					},
+				},
+			},
+		},
+		{
+			Scenario: "networking service with trunk mode and VLAN ranges",
+			Ironic: metal3api.IronicSpec{
+				NetworkingService: &metal3api.NetworkingService{
+					Enabled: true,
+					ProviderNetworks: []metal3api.ProviderNetworkConfig{
+						{Type: "inspection", Mode: metal3api.SwitchportModeTrunk, NativeVLAN: 100, AllowedVLANs: []string{"200-210", "300", "400-500"}},
+					},
+				},
+			},
+		},
+		{
+			Scenario: "networking service with hybrid mode provider network",
+			Ironic: metal3api.IronicSpec{
+				NetworkingService: &metal3api.NetworkingService{
+					Enabled: true,
+					ProviderNetworks: []metal3api.ProviderNetworkConfig{
+						{Type: "cleaning", Mode: metal3api.SwitchportModeHybrid, NativeVLAN: 100, AllowedVLANs: []string{"100", "200"}},
+					},
+				},
+			},
+		},
+		{
+			Scenario: "networking service access mode with allowedVLANs",
+			Ironic: metal3api.IronicSpec{
+				NetworkingService: &metal3api.NetworkingService{
+					Enabled: true,
+					ProviderNetworks: []metal3api.ProviderNetworkConfig{
+						{Type: "idle", Mode: metal3api.SwitchportModeAccess, NativeVLAN: 100, AllowedVLANs: []string{"100"}},
+					},
+				},
+			},
+			ExpectedError: "allowedVLANs cannot be set in access mode",
+		},
+		{
+			Scenario: "networking service with invalid VLAN range",
+			Ironic: metal3api.IronicSpec{
+				NetworkingService: &metal3api.NetworkingService{
+					Enabled: true,
+					ProviderNetworks: []metal3api.ProviderNetworkConfig{
+						{Type: "inspection", Mode: metal3api.SwitchportModeTrunk, NativeVLAN: 100, AllowedVLANs: []string{"500-200"}},
+					},
+				},
+			},
+			ExpectedError: "start (500) must be less than end (200)",
+		},
+		{
+			Scenario: "networking service with out of range VLAN",
+			Ironic: metal3api.IronicSpec{
+				NetworkingService: &metal3api.NetworkingService{
+					Enabled: true,
+					ProviderNetworks: []metal3api.ProviderNetworkConfig{
+						{Type: "inspection", Mode: metal3api.SwitchportModeTrunk, NativeVLAN: 100, AllowedVLANs: []string{"5000"}},
+					},
+				},
+			},
+			ExpectedError: "VLAN ID 5000 is out of range",
+		},
+		{
+			Scenario: "networking service trunk mode without allowedVLANs",
+			Ironic: metal3api.IronicSpec{
+				NetworkingService: &metal3api.NetworkingService{
+					Enabled: true,
+					ProviderNetworks: []metal3api.ProviderNetworkConfig{
+						{Type: "inspection", Mode: metal3api.SwitchportModeTrunk, NativeVLAN: 100},
+					},
+				},
+			},
+			ExpectedError: "allowedVLANs required for trunk mode",
+		},
+		{
+			Scenario: "networking service hybrid mode without allowedVLANs",
+			Ironic: metal3api.IronicSpec{
+				NetworkingService: &metal3api.NetworkingService{
+					Enabled: true,
+					ProviderNetworks: []metal3api.ProviderNetworkConfig{
+						{Type: "cleaning", Mode: metal3api.SwitchportModeHybrid, NativeVLAN: 100},
+					},
+				},
+			},
+			ExpectedError: "allowedVLANs required for hybrid mode",
+		},
+		{
+			Scenario: "networking service with duplicate provider network types",
+			Ironic: metal3api.IronicSpec{
+				NetworkingService: &metal3api.NetworkingService{
+					Enabled: true,
+					ProviderNetworks: []metal3api.ProviderNetworkConfig{
+						{Type: "idle", Mode: metal3api.SwitchportModeAccess, NativeVLAN: 100},
+						{Type: "idle", Mode: metal3api.SwitchportModeAccess, NativeVLAN: 200},
+					},
+				},
+			},
+			ExpectedError: "duplicate provider network type",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -687,6 +1427,411 @@ func TestValidateIronic(t *testing.T) {
 			}
 
 			err := ValidateIronic(&tc.Ironic, tc.OldIronic)
+			if tc.ExpectedError == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorContains(t, err, tc.ExpectedError)
+			}
+		})
+	}
+}
+
+func TestValidateCASettings(t *testing.T) {
+	testCases := []struct {
+		Scenario      string
+		TLS           metal3api.TLS
+		ExpectedError string
+	}{
+		{
+			Scenario: "empty TLS",
+		},
+		{
+			Scenario: "bmcCA with name",
+			TLS: metal3api.TLS{
+				BMCCA: &metal3api.ResourceReference{
+					Name: "my-ca",
+					Kind: metal3api.ResourceKindSecret,
+				},
+			},
+		},
+		{
+			Scenario: "bmcCA without name",
+			TLS: metal3api.TLS{
+				BMCCA: &metal3api.ResourceReference{
+					Kind: metal3api.ResourceKindSecret,
+				},
+			},
+			ExpectedError: "tls.bmcCA.name is required",
+		},
+		{
+			Scenario: "bmcCA consistent with bmcCAName",
+			TLS: metal3api.TLS{
+				BMCCA: &metal3api.ResourceReference{
+					Name: "my-ca",
+					Kind: metal3api.ResourceKindSecret,
+				},
+				BMCCAName: "my-ca",
+			},
+		},
+		{
+			Scenario: "bmcCA inconsistent kind with bmcCAName",
+			TLS: metal3api.TLS{
+				BMCCA: &metal3api.ResourceReference{
+					Name: "my-ca",
+					Kind: metal3api.ResourceKindConfigMap,
+				},
+				BMCCAName: "my-ca",
+			},
+			ExpectedError: "tls.bmcCA and tls.bmcCAName are both set but inconsistent",
+		},
+		{
+			Scenario: "bmcCA inconsistent name with bmcCAName",
+			TLS: metal3api.TLS{
+				BMCCA: &metal3api.ResourceReference{
+					Name: "new-ca",
+					Kind: metal3api.ResourceKindSecret,
+				},
+				BMCCAName: "old-ca",
+			},
+			ExpectedError: "tls.bmcCA and tls.bmcCAName are both set but inconsistent",
+		},
+		{
+			Scenario: "trustedCA with name",
+			TLS: metal3api.TLS{
+				TrustedCA: &metal3api.ResourceReferenceWithKey{
+					ResourceReference: metal3api.ResourceReference{
+						Name: "my-ca",
+						Kind: metal3api.ResourceKindConfigMap,
+					},
+				},
+			},
+		},
+		{
+			Scenario: "trustedCA without name",
+			TLS: metal3api.TLS{
+				TrustedCA: &metal3api.ResourceReferenceWithKey{
+					ResourceReference: metal3api.ResourceReference{
+						Kind: metal3api.ResourceKindConfigMap,
+					},
+				},
+			},
+			ExpectedError: "tls.trustedCA.name is required",
+		},
+		{
+			Scenario: "trustedCA consistent with trustedCAName",
+			TLS: metal3api.TLS{
+				TrustedCA: &metal3api.ResourceReferenceWithKey{
+					ResourceReference: metal3api.ResourceReference{
+						Name: "my-ca",
+						Kind: metal3api.ResourceKindConfigMap,
+					},
+				},
+				TrustedCAName: "my-ca",
+			},
+		},
+		{
+			Scenario: "trustedCA inconsistent kind with trustedCAName",
+			TLS: metal3api.TLS{
+				TrustedCA: &metal3api.ResourceReferenceWithKey{
+					ResourceReference: metal3api.ResourceReference{
+						Name: "my-ca",
+						Kind: metal3api.ResourceKindSecret,
+					},
+				},
+				TrustedCAName: "my-ca",
+			},
+			ExpectedError: "tls.trustedCA and tls.trustedCAName are both set but inconsistent",
+		},
+		{
+			Scenario: "trustedCA inconsistent name with trustedCAName",
+			TLS: metal3api.TLS{
+				TrustedCA: &metal3api.ResourceReferenceWithKey{
+					ResourceReference: metal3api.ResourceReference{
+						Name: "new-ca",
+						Kind: metal3api.ResourceKindConfigMap,
+					},
+				},
+				TrustedCAName: "old-ca",
+			},
+			ExpectedError: "tls.trustedCA and tls.trustedCAName are both set but inconsistent",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.Scenario, func(t *testing.T) {
+			err := validateCASettings(&tc.TLS)
+			if tc.ExpectedError == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorContains(t, err, tc.ExpectedError)
+			}
+		})
+	}
+}
+
+func TestResourcesValidate(t *testing.T) {
+	testCases := []struct {
+		Scenario      string
+		Resources     Resources
+		ExpectedError string
+	}{
+		{
+			Scenario: "minimal valid resources",
+			Resources: Resources{
+				Ironic: &metal3api.Ironic{},
+			},
+		},
+		{
+			Scenario: "trustedCA secret with matching key",
+			Resources: Resources{
+				Ironic: &metal3api.Ironic{
+					Spec: metal3api.IronicSpec{
+						TLS: metal3api.TLS{
+							TrustedCA: &metal3api.ResourceReferenceWithKey{
+								ResourceReference: metal3api.ResourceReference{
+									Name: "my-ca",
+									Kind: metal3api.ResourceKindSecret,
+								},
+								Key: "ca.crt",
+							},
+						},
+					},
+				},
+				TrustedCASecret: &corev1.Secret{
+					Data: map[string][]byte{
+						"ca.crt": []byte("cert-data"),
+					},
+				},
+			},
+		},
+		{
+			Scenario: "trustedCA secret with missing key",
+			Resources: Resources{
+				Ironic: &metal3api.Ironic{
+					Spec: metal3api.IronicSpec{
+						TLS: metal3api.TLS{
+							TrustedCA: &metal3api.ResourceReferenceWithKey{
+								ResourceReference: metal3api.ResourceReference{
+									Name: "my-ca",
+									Kind: metal3api.ResourceKindSecret,
+								},
+								Key: "missing-key",
+							},
+						},
+					},
+				},
+				TrustedCASecret: &corev1.Secret{
+					Data: map[string][]byte{
+						"ca.crt": []byte("cert-data"),
+					},
+				},
+			},
+			ExpectedError: "does not contain the required key missing-key",
+		},
+		{
+			Scenario: "trustedCA configmap with matching key",
+			Resources: Resources{
+				Ironic: &metal3api.Ironic{
+					Spec: metal3api.IronicSpec{
+						TLS: metal3api.TLS{
+							TrustedCA: &metal3api.ResourceReferenceWithKey{
+								ResourceReference: metal3api.ResourceReference{
+									Name: "my-ca",
+									Kind: metal3api.ResourceKindConfigMap,
+								},
+								Key: "ca-bundle.crt",
+							},
+						},
+					},
+				},
+				TrustedCAConfigMap: &corev1.ConfigMap{
+					Data: map[string]string{
+						"ca-bundle.crt": "cert-data",
+					},
+				},
+			},
+		},
+		{
+			Scenario: "trustedCA configmap with missing key",
+			Resources: Resources{
+				Ironic: &metal3api.Ironic{
+					Spec: metal3api.IronicSpec{
+						TLS: metal3api.TLS{
+							TrustedCA: &metal3api.ResourceReferenceWithKey{
+								ResourceReference: metal3api.ResourceReference{
+									Name: "my-ca",
+									Kind: metal3api.ResourceKindConfigMap,
+								},
+								Key: "missing-key",
+							},
+						},
+					},
+				},
+				TrustedCAConfigMap: &corev1.ConfigMap{
+					Data: map[string]string{
+						"ca-bundle.crt": "cert-data",
+					},
+				},
+			},
+			ExpectedError: "does not contain the required key missing-key",
+		},
+		{
+			Scenario: "trustedCA with empty key skips key check",
+			Resources: Resources{
+				Ironic: &metal3api.Ironic{
+					Spec: metal3api.IronicSpec{
+						TLS: metal3api.TLS{
+							TrustedCA: &metal3api.ResourceReferenceWithKey{
+								ResourceReference: metal3api.ResourceReference{
+									Name: "my-ca",
+									Kind: metal3api.ResourceKindConfigMap,
+								},
+							},
+						},
+					},
+				},
+				TrustedCAConfigMap: &corev1.ConfigMap{
+					Data: map[string]string{
+						"ca-bundle.crt": "cert-data",
+					},
+				},
+			},
+		},
+		{
+			Scenario: "trustedCA without resource defaults to valid",
+			Resources: Resources{
+				Ironic: &metal3api.Ironic{
+					Spec: metal3api.IronicSpec{
+						TLS: metal3api.TLS{
+							TrustedCA: &metal3api.ResourceReferenceWithKey{
+								ResourceReference: metal3api.ResourceReference{
+									Name: "my-ca",
+									Kind: metal3api.ResourceKindConfigMap,
+								},
+								Key: "ca.crt",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.Scenario, func(t *testing.T) {
+			err := tc.Resources.Validate()
+			if tc.ExpectedError == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorContains(t, err, tc.ExpectedError)
+			}
+		})
+	}
+}
+
+func TestValidateProviderNetwork(t *testing.T) {
+	testCases := []struct {
+		Scenario      string
+		Config        *metal3api.ProviderNetworkConfig
+		ExpectedError string
+	}{
+		{
+			Scenario: "access mode without allowedVLANs",
+			Config: &metal3api.ProviderNetworkConfig{
+				Mode:       metal3api.SwitchportModeAccess,
+				NativeVLAN: 100,
+			},
+		},
+		{
+			Scenario: "access mode with allowedVLANs",
+			Config: &metal3api.ProviderNetworkConfig{
+				Mode:         metal3api.SwitchportModeAccess,
+				NativeVLAN:   100,
+				AllowedVLANs: []string{"100"},
+			},
+			ExpectedError: "allowedVLANs cannot be set in access mode",
+		},
+		{
+			Scenario: "trunk mode with allowedVLANs",
+			Config: &metal3api.ProviderNetworkConfig{
+				Mode:         metal3api.SwitchportModeTrunk,
+				NativeVLAN:   100,
+				AllowedVLANs: []string{"100", "200"},
+			},
+		},
+		{
+			Scenario: "trunk mode with VLAN ranges",
+			Config: &metal3api.ProviderNetworkConfig{
+				Mode:         metal3api.SwitchportModeTrunk,
+				NativeVLAN:   100,
+				AllowedVLANs: []string{"200-210", "300", "400-500"},
+			},
+		},
+		{
+			Scenario: "trunk mode without allowedVLANs",
+			Config: &metal3api.ProviderNetworkConfig{
+				Mode:       metal3api.SwitchportModeTrunk,
+				NativeVLAN: 100,
+			},
+			ExpectedError: "allowedVLANs required for trunk mode",
+		},
+		{
+			Scenario: "hybrid mode with allowedVLANs",
+			Config: &metal3api.ProviderNetworkConfig{
+				Mode:         metal3api.SwitchportModeHybrid,
+				NativeVLAN:   100,
+				AllowedVLANs: []string{"100", "200", "300"},
+			},
+		},
+		{
+			Scenario: "hybrid mode without allowedVLANs",
+			Config: &metal3api.ProviderNetworkConfig{
+				Mode:       metal3api.SwitchportModeHybrid,
+				NativeVLAN: 100,
+			},
+			ExpectedError: "allowedVLANs required for hybrid mode",
+		},
+		{
+			Scenario: "invalid VLAN ID",
+			Config: &metal3api.ProviderNetworkConfig{
+				Mode:         metal3api.SwitchportModeTrunk,
+				NativeVLAN:   100,
+				AllowedVLANs: []string{"abc"},
+			},
+			ExpectedError: "is not a valid VLAN ID",
+		},
+		{
+			Scenario: "VLAN ID out of range",
+			Config: &metal3api.ProviderNetworkConfig{
+				Mode:         metal3api.SwitchportModeTrunk,
+				NativeVLAN:   100,
+				AllowedVLANs: []string{"5000"},
+			},
+			ExpectedError: "VLAN ID 5000 is out of range",
+		},
+		{
+			Scenario: "VLAN range reversed",
+			Config: &metal3api.ProviderNetworkConfig{
+				Mode:         metal3api.SwitchportModeTrunk,
+				NativeVLAN:   100,
+				AllowedVLANs: []string{"500-200"},
+			},
+			ExpectedError: "start (500) must be less than end (200)",
+		},
+		{
+			Scenario: "VLAN range with invalid end",
+			Config: &metal3api.ProviderNetworkConfig{
+				Mode:         metal3api.SwitchportModeTrunk,
+				NativeVLAN:   100,
+				AllowedVLANs: []string{"100-9999"},
+			},
+			ExpectedError: "VLAN ID 9999 is out of range",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.Scenario, func(t *testing.T) {
+			err := validateProviderNetwork(tc.Config)
 			if tc.ExpectedError == "" {
 				assert.NoError(t, err)
 			} else {

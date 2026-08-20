@@ -16,7 +16,6 @@ import (
 
 	metal3api "github.com/metal3-io/ironic-standalone-operator/api/v1alpha1"
 	"github.com/metal3-io/ironic-standalone-operator/pkg/ironic"
-	"github.com/metal3-io/ironic-standalone-operator/pkg/secretutils"
 )
 
 const IronicFinalizer = "ironic.metal3.io"
@@ -84,9 +83,6 @@ func generateSecret(cctx ironic.ControllerContext, owner metav1.Object, meta *me
 		return
 	}
 
-	// Add the environment label so the secret is included in the filtered cache
-	metav1.SetMetaDataLabel(&secret.ObjectMeta, secretutils.LabelEnvironmentName, secretutils.LabelEnvironmentValue)
-
 	err = controllerutil.SetOwnerReference(owner, secret, cctx.Scheme)
 	if err != nil {
 		return
@@ -117,6 +113,12 @@ func setConditionsFromStatus(cctx ironic.ControllerContext, status ironic.Status
 	}
 
 	setCondition(conditions, generation, true, metal3api.IronicReasonAvailable, message)
+}
+
+// isStatusReady checks if the Ironic status indicates it's ready by looking at the Ready condition.
+func isStatusReady(status *metal3api.IronicStatus) bool {
+	condition := meta.FindStatusCondition(status.Conditions, string(metal3api.IronicStatusReady))
+	return condition != nil && condition.Status == metav1.ConditionTrue
 }
 
 func clusterHasCRD(mgr ctrl.Manager, obj runtime.Object) (bool, error) {

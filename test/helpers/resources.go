@@ -2,6 +2,7 @@ package helpers
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -40,11 +41,27 @@ func SkipIfCustomImage() {
 	}
 }
 
+func SkipIfVersionBefore(minVersion string) {
+	GinkgoHelper()
+	if CustomImageVersion == "" || CustomImageVersion == "latest" {
+		return
+	}
+	custom, err := metal3api.ParseVersion(CustomImageVersion)
+	Expect(err).NotTo(HaveOccurred(), "invalid IRONIC_CUSTOM_VERSION %q", CustomImageVersion)
+	minimum := metal3api.MustParseVersion(minVersion)
+	if custom.Compare(minimum) < 0 {
+		Skip(fmt.Sprintf("skipping because custom image version %s is before %s", CustomImageVersion, minVersion))
+	}
+}
+
 func NewTLSSecret(ctx context.Context, k8sClient client.Client, namespace, name string) *corev1.Secret {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
+			Labels: map[string]string{
+				metal3api.LabelEnvironmentName: metal3api.LabelEnvironmentValue,
+			},
 		},
 		Data: map[string][]byte{
 			corev1.TLSCertKey:       ironicCertPEM,
@@ -62,6 +79,9 @@ func NewAuthSecret(ctx context.Context, k8sClient client.Client, namespace, name
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
+			Labels: map[string]string{
+				metal3api.LabelEnvironmentName: metal3api.LabelEnvironmentValue,
+			},
 		},
 		Data: map[string][]byte{
 			corev1.BasicAuthUsernameKey: []byte("admin"),

@@ -18,6 +18,7 @@ package main
 
 import (
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -27,10 +28,8 @@ import (
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme" //nolint:goimports // blank import with comment causes formatter conflict
-	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
-	// to ensure that exec-entrypoint and run can make use of them.
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	_ "k8s.io/client-go/plugin/pkg/client/auth" // k8s client auth plugins (Azure, GCP, OIDC, etc.)
 	"k8s.io/client-go/rest"
 	cliflag "k8s.io/component-base/cli/flag"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -145,6 +144,12 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
+	if databaseImage != "" {
+		err := errors.New("mariadb-image is no longer supported, use MariaDB Operator instead: https://github.com/mariadb-operator/mariadb-operator")
+		setupLog.Error(err, "invalid mariadb-image")
+		os.Exit(1)
+	}
+
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	if err := metal3iov1alpha1.CurrentFeatureGate.SetFromMap(featureGates); err != nil {
@@ -154,7 +159,7 @@ func main() {
 
 	setupLog.Info("enabling features", "FeatureGate", metal3iov1alpha1.CurrentFeatureGate.String())
 
-	versionInfo, err := ironic.NewVersionInfo(ironicImages, ironicVersion, databaseImage)
+	versionInfo, err := ironic.NewVersionInfo(ironicImages, ironicVersion)
 	if err != nil {
 		setupLog.Error(err, "invalid ironic-version")
 		os.Exit(1)
@@ -203,13 +208,14 @@ func main() {
 	}
 
 	if err = (&controller.IronicReconciler{
-		Client:      mgr.GetClient(),
-		KubeClient:  kubeClient,
-		APIReader:   mgr.GetAPIReader(),
-		Scheme:      mgr.GetScheme(),
-		Log:         ctrl.Log.WithName("controllers").WithName("Ironic"),
-		Domain:      clusterDomain,
-		VersionInfo: versionInfo,
+		Client:        mgr.GetClient(),
+		KubeClient:    kubeClient,
+		APIReader:     mgr.GetAPIReader(),
+		Scheme:        mgr.GetScheme(),
+		Log:           ctrl.Log.WithName("controllers").WithName("Ironic"),
+		Domain:        clusterDomain,
+		VersionInfo:   versionInfo,
+		EventRecorder: mgr.GetEventRecorder("ironic-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Ironic")
 		os.Exit(1)

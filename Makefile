@@ -5,7 +5,7 @@ SHELL = /usr/bin/env bash -o pipefail
 
 .DEFAULT_GOAL:=help
 
-GO_VERSION ?= 1.25.8
+GO_VERSION ?= 1.26.6
 GO := $(shell type -P go)
 # Use GOPROXY environment variable if set
 GOPROXY := $(shell $(GO) env GOPROXY)
@@ -20,6 +20,8 @@ ROOT_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 APIS_DIR := api
 TEST_DIR := test
 BIN_DIR := bin
+TOOLS_DIR := hack/tools
+TOOLS_BIN_DIR := $(TOOLS_DIR)/$(BIN_DIR)
 
 # CONTAINER_RUNTIME defines the container tool to be used for building images.
 CONTAINER_RUNTIME ?= docker
@@ -112,8 +114,9 @@ help: ## Display this help.
 ##@ Development
 
 .PHONY: manifests
-manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
+manifests: controller-gen crdoc ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+# NOTE(dtantsur): downstream modification: do not install or run crdoc
 #	./hack/gen-api-doc.sh
 
 .PHONY: modules
@@ -145,6 +148,22 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet ## Run tests.
 	go test ./... -coverprofile cover.out
 	cd api && go test ./... -coverprofile cover.out
+
+FUZZ_TIME ?= 30s
+
+.PHONY: fuzz
+fuzz: ## Run fuzz tests with seed corpus (no fuzzing, regression test only)
+	cd $(TEST_DIR)/fuzz && go test -race -v ./...
+
+.PHONY: fuzz-run
+fuzz-run: ## Run all fuzz tests sequentially with fuzzing enabled (use FUZZ_TIME=duration)
+	@echo "Discovering fuzz tests..."
+	@cd $(TEST_DIR)/fuzz; \
+ 	for fuzz_test in $$(go test -list='Fuzz.*' ./... | grep '^Fuzz'); do \
+		echo "Running $$fuzz_test for $(FUZZ_TIME)..."; \
+		go test -run=^$$ -fuzz=$$fuzz_test -fuzztime='$(FUZZ_TIME)' ./... || exit 1; \
+	done
+	@echo "All fuzz tests completed successfully!"
 
 ##@ Build
 
@@ -224,13 +243,14 @@ $(LOCALBIN):
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
+CRDOC ?= $(LOCALBIN)/crdoc
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.4.2
 CONTROLLER_TOOLS_VERSION ?= v0.17.0
 GOLANGCI_LINT_VERSION ?= v2.10.1
+CRDOC_VERSION ?= v0.6.2
 
-KUSTOMIZE_INSTALL_SCRIPT ?= "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary. If wrong version is installed, it will be removed before downloading.
 $(KUSTOMIZE): $(LOCALBIN)
@@ -238,7 +258,7 @@ $(KUSTOMIZE): $(LOCALBIN)
 		echo "$(LOCALBIN)/kustomize version is not expected $(KUSTOMIZE_VERSION). Removing it before installing."; \
 		rm -rf $(LOCALBIN)/kustomize; \
 	fi
-	test -s $(LOCALBIN)/kustomize || { curl -Ss $(KUSTOMIZE_INSTALL_SCRIPT) | bash -s -- $(subst v,,$(KUSTOMIZE_VERSION)) $(LOCALBIN); }
+	test -s $(LOCALBIN)/kustomize || GOBIN=$(LOCALBIN) go install sigs.k8s.io/kustomize/kustomize/v5@$(KUSTOMIZE_VERSION)
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary. If wrong version is installed, it will be overwritten.
@@ -250,12 +270,22 @@ $(GOLANGCI_LINT): $(LOCALBIN) ## Download golangci-lint locally if necessary. If
 	test -s $(GOLANGCI_LINT) && $(GOLANGCI_LINT) --version | grep -q $(GOLANGCI_LINT_VERSION)  || \
 	(cd hack/tools && go build -o ../../bin/golangci-lint github.com/golangci/golangci-lint/v2/cmd/golangci-lint)
 
+.PHONY: crdoc
+crdoc:  # NOTE(dtantsur): downstream modification: do not install or run crdoc
+# $(CRDOC): $(LOCALBIN)
+# 	test -s $(CRDOC) && $(CRDOC) --version | grep -q $(CRDOC_VERSION) || \
+# 	GOBIN=$(LOCALBIN) go install fybrik.io/crdoc@$(CRDOC_VERSION)
+
 .PHONY: lint
 lint: $(GOLANGCI_LINT)
 	$(GOLANGCI_LINT) config verify
-	$(GOLANGCI_LINT) run -v ./... --timeout=10m
-	cd api; $(GOLANGCI_LINT) run -v --path-prefix=api ./... --timeout=10m
-	cd test; $(GOLANGCI_LINT) run -v --path-prefix=test ./... --timeout=10m
+	$(GOLANGCI_LINT) run -v $(GOLANGCI_LINT_EXTRA_ARGS) ./... --timeout=10m
+	cd api; $(GOLANGCI_LINT) run -v $(GOLANGCI_LINT_EXTRA_ARGS) --path-prefix=api ./... --timeout=10m
+	cd test; $(GOLANGCI_LINT) run -v $(GOLANGCI_LINT_EXTRA_ARGS) --path-prefix=test ./... --timeout=10m
+
+.PHONY: lint-fix
+lint-fix: $(GOLANGCI_LINT) ## Lint the codebase and run auto-fixers if supported by the linter
+	GOLANGCI_LINT_EXTRA_ARGS=--fix $(MAKE) lint
 
 .PHONY: bundle
 bundle: manifests kustomize ## Generate bundle manifests and metadata, then validate generated files.
@@ -267,6 +297,15 @@ bundle: manifests kustomize ## Generate bundle manifests and metadata, then vali
 .PHONY: bundle-build
 bundle-build: ## Build the bundle image.
 	$(CONTAINER_RUNTIME) build -f bundle.Dockerfile -t $(BUNDLE_IMG) .
+## OPM checksums for v1.23.0 (from https://github.com/operator-framework/operator-registry/releases/download/v1.23.0/checksums.txt)
+OPM_VERSION = v1.23.0
+OPM_SHA256_linux_amd64   = dc0d4d287fef23f165c837b2e6cb68e2506ff295dc57110b9bfe3b553359eb36
+OPM_SHA256_linux_arm64   = 00281c9239ad0aa036a8123bd4c6bb8c840fcab53d49bb65328d35b416e7ba60
+OPM_SHA256_linux_ppc64le = 87772cd2826c9154a87e49ea032a3c385ee5cc3b696641f9e0a3d564085873d7
+OPM_SHA256_linux_s390x   = d56e4cc0dcd3cb81110e7bcfabb15d2d1e08084ccb6baa51ee77be71e70a4a20
+OPM_SHA256_darwin_amd64  = 60d78a3b8bb7e19606df4551606eb848e291186ebee510dc1c0aba68d18302e6
+OPM_SHA256_darwin_arm64  = e57e2b5fac29657956f8da0fdf73c7eae6eaa58920d53d1594d83bbad20f28b1
+
 .PHONY: opm
 OPM = ./bin/opm
 opm: ## Download opm locally if necessary.
@@ -276,7 +315,10 @@ ifeq (,$(shell which opm 2>/dev/null))
 	set -e ;\
 	mkdir -p $(dir $(OPM)) ;\
 	OS=$(shell go env GOOS) && ARCH=$(shell go env GOARCH) && \
-	curl -sSLo $(OPM) https://github.com/operator-framework/operator-registry/releases/download/v1.23.0/$${OS}-$${ARCH}-opm ;\
+	curl -fsSLo $(OPM) https://github.com/operator-framework/operator-registry/releases/download/$(OPM_VERSION)/$${OS}-$${ARCH}-opm ;\
+ 	EXPECTED="$(OPM_SHA256_$(shell go env GOOS)_$(shell go env GOARCH))" ;\
+ 	test -n "$${EXPECTED}" || { echo "No pinned SHA256 for opm platform $${OS}-$${ARCH}" >&2; exit 1; } ;\
+ 	if command -v sha256sum >/dev/null 2>&1; then echo "$${EXPECTED}  $(OPM)" | sha256sum -c -; else echo "$${EXPECTED}  $(OPM)" | shasum -a 256 -c -; fi ;\
 	chmod +x $(OPM) ;\
 	}
 else
@@ -325,8 +367,11 @@ release-manifests: $(KUSTOMIZE) $(RELEASE_DIR) ## Builds the manifests to publis
 	$(KUSTOMIZE) build config/default > $(RELEASE_DIR)/install.yaml
 
 .PHONY: release-notes
-release-notes: $(RELEASE_NOTES_DIR) $(RELEASE_NOTES)
-	cd hack/tools && $(GO) run release/notes.go  --releaseTag=$(RELEASE_TAG) > $(realpath $(RELEASE_NOTES_DIR))/$(RELEASE_TAG).md
+release-notes: $(RELEASE_NOTES_DIR) $(TOOLS_DIR)/go.mod ## Generates release notes for the given tag
+	@echo "Generating release notes for $(RELEASE_TAG)..."
+	@cd $(TOOLS_DIR) && $(GO) build -tags=tools -o $(BIN_DIR)/release ./release
+	@$(TOOLS_BIN_DIR)/release --releaseTag="$(RELEASE_TAG)" --githubToken="$${GITHUB_TOKEN}" > $(RELEASE_NOTES_DIR)/$(RELEASE_TAG).md
+	@echo "Release notes written to $(realpath $(RELEASE_NOTES_DIR))/$(RELEASE_TAG).md"
 
 .PHONY: release
 release: kustomize
