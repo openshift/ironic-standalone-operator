@@ -116,6 +116,7 @@ help: ## Display this help.
 .PHONY: manifests
 manifests: controller-gen crdoc ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+# NOTE(dtantsur): downstream modification: do not install or run crdoc
 #	./hack/gen-api-doc.sh
 
 .PHONY: modules
@@ -270,10 +271,10 @@ $(GOLANGCI_LINT): $(LOCALBIN) ## Download golangci-lint locally if necessary. If
 	(cd hack/tools && go build -o ../../bin/golangci-lint github.com/golangci/golangci-lint/v2/cmd/golangci-lint)
 
 .PHONY: crdoc
-crdoc: $(CRDOC) ## Download crdoc locally if necessary. If wrong version is installed, it will be overwritten.
-$(CRDOC): $(LOCALBIN)
-	test -s $(CRDOC) && $(CRDOC) --version | grep -q $(CRDOC_VERSION) || \
-	GOBIN=$(LOCALBIN) go install fybrik.io/crdoc@$(CRDOC_VERSION)
+crdoc:  # NOTE(dtantsur): downstream modification: do not install or run crdoc
+# $(CRDOC): $(LOCALBIN)
+# 	test -s $(CRDOC) && $(CRDOC) --version | grep -q $(CRDOC_VERSION) || \
+# 	GOBIN=$(LOCALBIN) go install fybrik.io/crdoc@$(CRDOC_VERSION)
 
 .PHONY: lint
 lint: $(GOLANGCI_LINT)
