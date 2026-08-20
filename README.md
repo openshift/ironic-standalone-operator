@@ -12,4 +12,10 @@ guide for more details:
 * [Installing Ironic](https://book.metal3.io/irso/install-basics)
 * [API reference](docs/api.md)
 
+The following links are for developers and local experimentation:
+
+* [General contributing information](CONTRIBUTING.md)
+* [Testing policy and guide](docs/testing.md)
+* [Run controller locally on kind](docs/run-controller-local-kind.md)
+
 [ironic]: https://ironicbaremetal.org/
